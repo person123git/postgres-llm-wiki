@@ -19,6 +19,7 @@ verified_by_agent: not yet
   - [Merge join](#merge-join)
   - [Hash join](#hash-join)
   - [Side-by-side comparison](#side-by-side-comparison)
+  - [Follow-up: why one method is chosen, by simple example](#follow-up-why-one-method-is-chosen-by-simple-example)
   - [Why one gets chosen over another](#why-one-gets-chosen-over-another)
   - [Which methods are possible at all](#which-methods-are-possible-at-all)
   - [The cost formulas](#the-cost-formulas)
@@ -45,6 +46,12 @@ verified_by_agent: not yet
 ## Question
 
 In PostgreSQL 12, explain each join method, why one gets chosen over another, and which ones are faster than the others?
+
+Follow-up (2026-11-02):
+
+When explaining why a join method is chosen, explain it by giving a didactic and simple example.
+
+> Prompt note: corrected from "when explaining why a join method is chosen explain it giving a didatical and simple example". Corrections: capitalized the first word, added a comma after the introductory clause, changed "giving" to "by giving", corrected "didatical" to "didactic", and added the final period. The meaning is unchanged.
 
 ## Answer
 
@@ -221,9 +228,120 @@ A hash join also corrects itself during execution. If the table outgrows its bud
 
 Sources for the memory and spill rows: [nodeMaterial.c:64](../../../../raw/postgres-12/src/backend/executor/nodeMaterial.c#L64), [nodeMaterial.c:285](../../../../raw/postgres-12/src/backend/executor/nodeMaterial.c#L285), [tuplesort.c:22-28](../../../../raw/postgres-12/src/backend/utils/sort/tuplesort.c#L22-L28), [nodeHash.c:704](../../../../raw/postgres-12/src/backend/executor/nodeHash.c#L704), [nodeHash.c:1036-1045](../../../../raw/postgres-12/src/backend/executor/nodeHash.c#L1036-L1045). Sources for the join-type rows: [joinpath.c:1345-1378](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L1345-L1378), [joinpath.c:2017-2026](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L2017-L2026), [nodeHashjoin.c:527-551](../../../../raw/postgres-12/src/backend/executor/nodeHashjoin.c#L527-L551). A nested loop does not lose a `RIGHT JOIN` outright: the planner also tries that join with the sides swapped, as a `LEFT` join ([joinrels.c:802-807](../../../../raw/postgres-12/src/backend/optimizer/path/joinrels.c#L802-L807)).
 
+### Follow-up: why one method is chosen, by simple example
+
+**The short answer.** The planner picks a join method the way you would pick a way to match two piles of paper. It estimates how much work each way takes, and it does the cheapest one ([optimizer/README:40-42](../../../../raw/postgres-12/src/backend/optimizer/README#L40-L42)). Three facts, known before the query runs, decide that work:
+
+1. How many rows each side has, as estimated from [statistics](../../../glossary.md#statistics).
+2. Whether an index can find the matching rows directly.
+3. Whether the rows already arrive in join-key order.
+
+Change one of these facts and the winner changes. The examples below change one fact at a time.
+
+**An everyday picture.** This is an analogy, not a description of the code. You have a pile of invoices, each naming a customer number, and a cabinet of 1,000,000 customer folders. You must find the folder for each invoice. There are four ways to do it:
+
+| Strategy | What you do | Join method it resembles |
+|---|---|---|
+| Compare everything | For each invoice, read every folder | Plain [nested loop](../../../glossary.md#nested-loop-join), no index ([costsize.c:2465-2471](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2465-L2471)) |
+| Look each one up | For each invoice, jump to its folder using the cabinet's tabs | Nested loop with an [index scan](../../../glossary.md#index-scan) on the inner side ([optimizer/README:717-741](../../../../raw/postgres-12/src/backend/optimizer/README#L717-L741)) |
+| Walk both in order | Sort the invoices by number, then walk invoices and folders side by side | [Merge join](../../../glossary.md#merge-join) ([nodeMergejoin.c:61-85](../../../../raw/postgres-12/src/backend/executor/nodeMergejoin.c#L61-L85)) |
+| Sort into bins first | Drop every folder into a numbered bin, then let each invoice check only its own bin | [Hash join](../../../glossary.md#hash-join) ([nodeHash.c#MultiExecPrivateHash](../../../../raw/postgres-12/src/backend/executor/nodeHash.c#L139-L175), [nodeHashjoin.c:345-440](../../../../raw/postgres-12/src/backend/executor/nodeHashjoin.c#L345-L440)) |
+
+Common sense picks a different strategy for each job:
+
+- With 100 invoices, look each one up. That is 100 quick jumps, while the bins need all 1,000,000 folders sorted in first.
+- With a huge unsorted pile and no tabs, use the bins. Each folder is handled once and each invoice once.
+- If you need only the 10 lowest customer numbers, walk in order and stop after 10.
+
+The planner reaches the same conclusions, but with numbers. The three examples below show each case on this page's fixtures, with run 12's medians from [the script](#the-script).
+
+#### Example 1: no index, 10,000 rows on each side, so the hash join wins
+
+The query is the `sweep10000` statement. The key `k` has no index and its values are in no particular order:
+
+```sql
+SELECT count(*), sum(a.v + b.v) FROM sa_10000 a JOIN sb_10000 b ON a.k = b.k;
+```
+
+Count the work each method must do:
+
+```text
+Nested loop : 10,000 outer rows × 10,000 inner rows = 100,000,000 row pairs to test
+Merge join  : sort 10,000 rows, sort 10,000 more, then one walk over 20,000 rows
+Hash join   : put 10,000 rows into a hash table, then do 10,000 lookups
+```
+
+The nested loop **multiplies** the two sizes, because it tests every pair ([costsize.c:2465-2471](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2465-L2471)). The hash join **adds** them: one charge per inserted row and one per probing row ([costsize.c:3289-3291](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3289-L3291)). The merge join also adds them, but each sort charges about log2(10,000) ≈ 13.3 comparisons per row ([costsize.c:1774-1775](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L1774-L1775)).
+
+| | Nested loop | Merge join | Hash join |
+|---|---|---|---|
+| Planner's price ([cost](../../../glossary.md#cost) units) | 1,500,335.00 | 1,838.77 | **572.50** |
+| Measured median | 2,309 ms | 4.62 ms | **2.10 ms** |
+
+The hash join has the lowest price, so it is the method the planner would keep, with parallelism off as in these legs. The line-by-line arithmetic behind the three prices is under [the worked calculation](#worked-calculation-the-same-join-priced-three-ways). Here the price ranking and the time ranking agree.
+
+This scenario ran only forced legs, so no leg recorded the planner's own choice. Each forced leg shows the cheapest path of its method, which is why the hash join's 572.50 is the price an unforced planner would compare against the other two. The legs force a method with the `enable_*` settings and run in one process with `max_parallel_workers_per_gather = 0`; the default is 2. See [non-default settings](#non-default-settings-in-the-measurement).
+
+#### Example 2: 100 rows against an indexed million-row table, so the nested loop wins
+
+Now change two facts: one side shrinks to 100 rows, and the other side, 1,000,000 rows, gets an index on the join key. This is the `lookup` statement. `js` holds 100 rows, and `jb.id` is `jb`'s primary key:
+
+```sql
+SELECT count(*), sum(b.v) FROM js a JOIN jb b ON a.bid = b.id;
+```
+
+The nested loop no longer tests every pair. For each of the 100 outer rows, it runs one index search for that row's key, as a [parameterized path](../../../glossary.md#parameterized-path) ([optimizer/README:717-741](../../../../raw/postgres-12/src/backend/optimizer/README#L717-L741)). So its work is 100 small searches.
+
+The other two methods cannot use the index to skip rows:
+
+- The hash join reads its whole inner side to build the table, and reads its outer side to the end while probing ([nodeHash.c#MultiExecPrivateHash](../../../../raw/postgres-12/src/backend/executor/nodeHash.c#L139-L175), [nodeHashjoin.c:345-440](../../../../raw/postgres-12/src/backend/executor/nodeHashjoin.c#L345-L440)). Whichever side it hashes, it reads all 1,000,000 `jb` rows. The empty-input shortcuts under [Hash join](#hash-join) do not apply, because neither side is empty.
+- The merge join walks `jb`'s index from its first entry, and reads past every key below the next match ([nodeMergejoin.c:1174](../../../../raw/postgres-12/src/backend/executor/nodeMergejoin.c#L1174), [nodeMergejoin.c:1270](../../../../raw/postgres-12/src/backend/executor/nodeMergejoin.c#L1270)). The largest outer key, 1,000,000, is also `jb`'s last key, so it walks the whole index.
+
+| | Nested loop | Merge join | Hash join |
+|---|---|---|---|
+| Buffers touched | **401** | 13,050 | 10,314 |
+| Measured median | **0.314 ms** | 68.0 ms | 40.0 ms |
+
+The planner's own choice, at the default `max_parallel_workers_per_gather`, was the nested loop, at 0.336 ms. Compare Example 1: the planner's choice differs because the row count and the index changed, not because a rule names a method.
+
+#### Example 3: only the first 10 rows in key order, so the merge join wins
+
+Now keep two million-row tables, `ja` and `jb`, but ask for only the first 10 rows in `id` order. Both `id` columns are primary keys, so their indexes return rows in `id` order. This is the `topn` statement:
+
+```sql
+SELECT a.id, b.v FROM ja a JOIN jb b ON a.id = b.id ORDER BY a.id LIMIT 10;
+```
+
+The order fact now decides:
+
+- A merge join over the two indexes produces rows already sorted on `id` ([joinpath.c:1027-1029](../../../../raw/postgres-12/src/backend/optimizer/path/joinpath.c#L1027-L1029)). It can stop after 10 output rows.
+- An indexed nested loop keeps the outer side's order ([optimizer/README:596-605](../../../../raw/postgres-12/src/backend/optimizer/README#L596-L605)), so it can also stop after 10.
+- A hash join promises no order ([optimizer/README:605-608](../../../../raw/postgres-12/src/backend/optimizer/README#L605-L608)). A Sort above it must collect all 1,000,000 joined rows before it can return the first one ([nodeSort.c#ExecSort](../../../../raw/postgres-12/src/backend/executor/nodeSort.c#L40-L118)).
+
+The planner sees this through the `LIMIT`. Each final path gets a Limit whose cost covers only the rows it reads, so a plan that can stop early gets a small price ([pathnode.c#adjust_limit_rows_costs](../../../../raw/postgres-12/src/backend/optimizer/util/pathnode.c#L3623-L3670)).
+
+| | Nested loop | Merge join | Hash join |
+|---|---|---|---|
+| Measured median | 0.153 ms | 0.188 ms | 426 ms |
+
+The planner chose the merge join, which took 0.210 ms. The nested loop and merge join ranges overlap (0.116 to 0.206 against 0.167 to 0.224 ms), so neither is clearly faster; both are more than 2,000 times faster than the hash join here.
+
+#### When the guess is wrong
+
+All three examples worked because the planner's row estimates were right. The planner compares only estimated numbers, so a wrong estimate picks the wrong method. The measured `misest` case shows it, with the legs at `max_parallel_workers_per_gather = 0`:
+
+1. The fixture makes three filter columns always equal. The planner multiplies their [selectivities](../../../glossary.md#selectivity) as if they were independent, so it expects 1 outer row instead of 10,000. See [non-default settings](#non-default-settings-in-the-measurement) for that fixture state.
+2. With 1 outer row, the nested loop needs one inner scan and is priced at 26,902, below the hash join's 52,734. The planner picks the nested loop.
+3. At run time, 10,000 outer rows arrive. The nested loop runs its inner scan once per outer row ([nodeNestloop.c:100-202](../../../../raw/postgres-12/src/backend/executor/nodeNestloop.c#L100-L202)), 10,000 times. It took 6,084 ms.
+4. After `CREATE STATISTICS ... (dependencies)` and `ANALYZE`, the estimate became 9,400 rows, and the planner chose the hash join on its own. It took 92.0 ms.
+
+In the analogy, the planner was told there was one invoice and decided to look it up by hand; ten thousand invoices then arrived. The full numbers are under [Key interaction](#key-interaction-estimated-cost-is-not-elapsed-time).
+
+**What the examples show.** The planner has no rule such as "large tables use hash joins". It prices each legal method from three inputs: estimated row counts, available indexes, and existing order. A multiplication loses to an addition when both sides are large (Example 1). A few index searches beat reading a whole table (Example 2). Existing order plus a `LIMIT` lets a join stop early (Example 3). When the estimated rows are wrong, the prices are wrong too, and so is the choice. The next section gives the planner's full procedure.
+
 ### Why one gets chosen over another
 
-The planner follows these steps. Each output feeds the next.
+The planner follows these steps. Each output feeds the next. For a simple example of these steps at work, see [the previous section](#follow-up-why-one-method-is-chosen-by-simple-example).
 
 1. **Order the joins.** `standard_join_search()` builds join relations level by level, two inputs at a time ([allpaths.c#standard_join_search](../../../../raw/postgres-12/src/backend/optimizer/path/allpaths.c#L2846-L2881)). When one join list has `geqo_threshold` (default 12) or more items, [GEQO](../../../glossary.md#geqo) takes over if it is enabled and no `join_search_hook` is set ([allpaths.c:2752](../../../../raw/postgres-12/src/backend/optimizer/path/allpaths.c#L2752), [allpaths.c:2807-2812](../../../../raw/postgres-12/src/backend/optimizer/path/allpaths.c#L2807-L2812), [guc.c#geqo_threshold](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2027-L2029)). Items are not tables. Explicit `JOIN` syntax is folded into one list only up to `join_collapse_limit`, and subqueries in `FROM` only up to `from_collapse_limit`, both 8 by default. So twelve explicitly joined tables do not reach the threshold at the defaults, while twelve tables listed with commas do ([initsplan.c:792-793](../../../../raw/postgres-12/src/backend/optimizer/plan/initsplan.c#L792-L793), [initsplan.c:1038-1043](../../../../raw/postgres-12/src/backend/optimizer/plan/initsplan.c#L1038-L1043), [guc.c#from_collapse_limit](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1996-L2005), [guc.c#join_collapse_limit](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2009-L2018)). See [join order search](../../../glossary.md#join-order-search).
 2. **Try the legal directions.** For each pair, `populate_joinrel_with_paths()` calls `add_paths_to_joinrel()` with each input as outer, except for the semi and anti join limits in the [mental model](#mental-model-the-values-that-decide-the-choice) ([joinrels.c:785-790](../../../../raw/postgres-12/src/backend/optimizer/path/joinrels.c#L785-L790), [joinrels.c:802-807](../../../../raw/postgres-12/src/backend/optimizer/path/joinrels.c#L802-L807), [joinrels.c:816-821](../../../../raw/postgres-12/src/backend/optimizer/path/joinrels.c#L816-L821)).
@@ -479,7 +597,7 @@ As a working rule on this evidence: a nested loop with an index is fastest for s
 
 | Item | What to give |
 |---|---|
-| Purpose | Times all three join methods on the same fixtures. Backs every number under [Which is faster](#which-is-faster-measured-results), the charges under [Key interaction](#key-interaction-estimated-cost-is-not-elapsed-time), including the unique-side legs, the `sweep10000` plans in the [worked calculation](#worked-calculation-the-same-join-priced-three-ways), the batch and `disable_cost` arithmetic, the catalog counts and the `EXPLAIN`-only plans under [Which methods are possible](#which-methods-are-possible-at-all), the ratios in the [Main idea](#main-idea), the 1.89e10 nested loop breakdown, the `misest.hash` bucket line and the 63,245.02 one-batch plan cost. |
+| Purpose | Times all three join methods on the same fixtures. Backs every number under [Which is faster](#which-is-faster-measured-results), the charges under [Key interaction](#key-interaction-estimated-cost-is-not-elapsed-time), including the unique-side legs, the `sweep10000` plans in the [worked calculation](#worked-calculation-the-same-join-priced-three-ways), the batch and `disable_cost` arithmetic, the catalog counts and the `EXPLAIN`-only plans under [Which methods are possible](#which-methods-are-possible-at-all), the ratios in the [Main idea](#main-idea), the 1.89e10 nested loop breakdown, the `misest.hash` bucket line, the 63,245.02 one-batch plan cost, and the prices, buffer counts and medians quoted in the [simple-example follow-up](#follow-up-why-one-method-is-chosen-by-simple-example), all from run 12. |
 | Invocation | From the repository root, extract the script with the command below, then run `bash .wiki-runtime/tmp/jm12-run.sh [stage ...]`. |
 | Stages | See [Stages](#stages). The default runs every stage from `build` through `stop`, except `start`. |
 | Environment | `PORT12` (default 55448), `JOBS` (default 8, parallel make jobs), `REPS` (default 5, timed runs per leg; the `sweep` stage always uses 3). Keep `REPS` odd: the script takes the middle sorted value as the median, so an even count reports the lower of the two middle values. |
@@ -1128,6 +1246,7 @@ done
 - Estimation, access and caches: `heapam_estimate_rel_size()` and `heapam_index_fetch_tuple()` in `heapam_handler.c`, `ReleaseAndReadBuffer()` in `bufmgr.c`, `build_join_pathkeys()` in `pathkeys.c`, the statistics update in `vacuumlazy.c`, `compute_semi_anti_join_factors()` and `cost_rescan()` in `costsize.c`, `eqjoinsel()` in `selfuncs.c`, `op_mergejoinable()` and `op_hashjoinable()` in `lsyscache.c`, `plancache.c`, `restrictinfo.c`, `explain.c`, `nodeSort.c`, `tuplesort.c`, `guc.c`.
 - Catalog, build and docs: `pg_operator.h`, `pg_operator.dat`, `genbki.pl`, `configure.in`, `initdb.c`, `config.sgml`, `arch-dev.sgml`, `perform.sgml`, `xoper.sgml`, `ref/create_operator.sgml`, and `postgres_fdw.c`. Tests: `join.sql`, `join_hash.sql`.
 - Fifth review, 2026-11-02: every source link was re-audited for file, range and label, and every cited range was re-read against its claim.
+- Simple-example follow-up, 2026-11-02: the fixture and query definitions in [the script](#the-script) for `sweep10000`, `lookup`, `topn` and `misest`, the quicksort charge in `cost_sort()`, and the run 12 numbers already filed on this page. No new measurement ran.
 - Sixth review, 2026-11-02: `set_base_rel_consider_startup()` in `allpaths.c`, the `tuple_fraction` handling in `make_subplan()` (`subselect.c`) and in `prepunion.c`, and the merge join startup charges in `initial_cost_mergejoin()` and `final_cost_mergejoin()`.
 
 ## Evidence Map
@@ -1144,6 +1263,7 @@ done
 | Hash batching and growth | [nodeHash.c#ExecChooseHashTableSize](../../../../raw/postgres-12/src/backend/executor/nodeHash.c#L667-L845), [nodeHash.c#ExecHashIncreaseNumBatches](../../../../raw/postgres-12/src/backend/executor/nodeHash.c#L888-L906) |
 | Unique-inner hash charges | [costsize.c:3519-3567](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3519-L3567), [selfuncs.c:2064](../../../../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L2064), [joinrels.c:710](../../../../raw/postgres-12/src/backend/optimizer/path/joinrels.c#L710); the `unique` legs confirm the 11,125 hash gap and no merge gain |
 | Which method is faster | This page's script: what the built server did on this fixture and host, not a general law |
+| Simple-example follow-up: multiply versus add, index search versus full read, early stop with order and `LIMIT` | [costsize.c:2465-2471](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L2465-L2471), [costsize.c:3289-3291](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L3289-L3291), [costsize.c:1774-1775](../../../../raw/postgres-12/src/backend/optimizer/path/costsize.c#L1774-L1775), [optimizer/README:717-741](../../../../raw/postgres-12/src/backend/optimizer/README#L717-L741), [optimizer/README:596-608](../../../../raw/postgres-12/src/backend/optimizer/README#L596-L608), [pathnode.c#adjust_limit_rows_costs](../../../../raw/postgres-12/src/backend/optimizer/util/pathnode.c#L3623-L3670); numbers reused from run 12, no new run |
 
 ## Open Questions
 

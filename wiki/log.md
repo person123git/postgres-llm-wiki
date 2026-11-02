@@ -2352,3 +2352,26 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Isolation and teardown: no service was started; nothing to stop or delete.
 - Commit: committed on `master`; `origin` refuses this session's SSH key, so the commit stays local with the earlier unpushed ones.
 - Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
+
+## [2026-11-02] lint | Standalone lint run
+
+- Prompt hygiene: the prompt "follow agents.md, fix all lint reported issues" was read as "Follow AGENTS.md and fix all issues that lint reports"; the meaning is unchanged.
+- Scope: a standalone `scripts/wiki_lint` run, with fixes for anything it reported. The first run reported 0 errors and 0 warnings, so no page needed a change. No rule conflict arose. No subagent ran.
+- Contradiction check: no content statement was added or changed, so there was nothing to compare; none found.
+- Glossary: no terms were used beyond the lint run; no change needed. `wiki_lint` does not check the glossary's shape, pins or anchors, and this task did not re-check them by hand.
+- Common concepts: none touched.
+- Isolation and teardown: no service was started; nothing to stop or delete.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
+
+## [2026-11-02] follow-up v12 | Join methods: simple example of why a method is chosen
+
+- Prompt hygiene: original wording "follow agents.md, in postgresql 12, for question: # Join Methods in PostgreSQL 12: How Each Works, Why One Is Chosen, and Which Is Faster (unverified) , add follow-up: when explaining why a join method is chosen explain it giving a didatical and simple example". The filed follow-up reads "When explaining why a join method is chosen, explain it by giving a didactic and simple example." Corrections: capitalized the first word, added a comma after the introductory clause, "giving" became "by giving", "didatical" became "didactic", and a final period was added. The meaning is unchanged.
+- Change: added the follow-up to `## Question` with a prompt note, and a new `### Follow-up: why one method is chosen, by simple example` subsection placed just before "Why one gets chosen over another", which now links back to it. The subsection gives the three deciding facts, an invoice-and-cabinet analogy mapped to each method, three one-change-at-a-time examples (`sweep10000`: hash; `lookup`: nested loop; `topn`: merge) and the `misest` wrong-estimate case. Updated `## Contents`, the Usage purpose row, `## Context Reviewed` and `## Evidence Map`. No rule conflict arose. No subagent ran.
+- Evidence: `raw/postgres-12/` at `45b88269a353ad93744772791feb6d01bc7e1e42`; re-read `cost_sort()`'s quicksort charge (`costsize.c:1774-1775`), the nested loop and hash charges, `optimizer/README` on parameterized paths and join output order, and the fixture and query definitions in the page's script. Every number in the new section is a run 12 number already filed on the page; no measurement ran.
+- Non-default behavior: the new section states that the `sweep` legs are forced with `enable_*` and run with `max_parallel_workers_per_gather = 0` (default 2), that the `misest` legs run at 0 with a correlated-column fixture, and that the `lookup` and `topn` planner's picks ran at the default parallel setting; each links the page's non-default settings table.
+- Contradiction check: compared every new statement with the Main idea ratios, the worked calculation, the measured results table, the `lookup` buffer counts, the `topn` ranges and its Open Question, the `misest` costs and timings under Key interaction, the "Default-parallel `misest`" Open Question, the Usage purpose row, both index entries and the v12 coverage notes. Found 0 contradictions. Two of my own draft wordings were tightened before filing: "about 2,000 times" became "more than 2,000 times" (426 ms against 0.188 and 0.153 ms), and the `sweep10000` planner choice is stated as derived from the forced prices, because no leg recorded it.
+- Glossary: reviewed Nested loop join, Merge join, Hash join, Index scan, Parameterized path, Cost, Statistics and Selectivity; all exist and fit v12, and are linked from the new section. No change needed. Count stays 372.
+- Common concepts: v12 has no `common-concepts/` directory, so none was linked or touched.
+- Bookkeeping: both index entries gained one sentence about the follow-up; a dated coverage note added to `wiki/versions.md`. `verified_by_agent` stays `not yet`.
+- Isolation and teardown: no service was started; nothing to stop or delete.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
