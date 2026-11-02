@@ -223,6 +223,7 @@ verified_by_agent: not yet
   - [pg_freespacemap](#pg_freespacemap)
   - [pg_index](#pg_index)
   - [pg_node_tree](#pg_node_tree)
+  - [pg_operator](#pg_operator)
   - [pg_plan_advice](#pg_plan_advice)
   - [pg_proc](#pg_proc)
   - [pgs_mask](#pgs_mask)
@@ -419,6 +420,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - On 2026-10-25, the PostgreSQL 12 amcheck and data-checksums question added [Bloom filter](#bloom-filter), checked on PostgreSQL 12 only, added a PostgreSQL 12 note to [Base backup](#base-backup), which is now checked on 12, 17 and 19, and extended the PostgreSQL 12 note of [Data checksums](#data-checksums) with the block-number mixing, write-time computation and buffer-hit behavior. There are 357 terms.
 
 - On 2026-10-30, the review fixes for the PostgreSQL 17 planner tutorial added [AlternativeSubPlan](#alternativesubplan), [Arbiter index](#arbiter-index), [DISTINCT ON](#distinct-on), [Hash aggregation](#hash-aggregation), [Join domain](#join-domain), [parallel_setup_cost and parallel_tuple_cost](#parallel_setup_cost-and-parallel_tuple_cost), [Plan cache](#plan-cache), [Pseudoconstant qual](#pseudoconstant-qual) and [TID scan and TID range scan](#tid-scan-and-tid-range-scan), checked on PostgreSQL 17 only. [EvalPlanQual](#evalplanqual) gained a PostgreSQL 17 note, [EXPLAIN](#explain) now rejects only the turned-on forms of `WAL`, `TIMING` and `SERIALIZE` without `ANALYZE`, and [Hash join](#hash-join) names the join-relation conditions of a partial hash join. Six headings were moved so that the list follows the sort rule above. There are 371 terms.
+
+- On 2026-11-02, the fourth review of the PostgreSQL 12 join methods question added [pg_operator](#pg_operator), checked on PostgreSQL 12 only. There are 372 terms.
 
 ## Source Pins
 
@@ -3170,6 +3173,23 @@ Related: [Invalid index](#invalid-index), [CONCURRENTLY](#concurrently), [Partia
 
 Related: [Partition bound](#partition-bound), [pg_class](#pg_class), [pg_index](#pg_index), [Parse tree](#parse-tree)
 
+### pg_operator
+
+**Aliases:** `oprcanmerge`, `oprcanhash`, mergejoinable operator, hashjoinable operator, `CREATE OPERATOR ... HASHES, MERGES`, `op_mergejoinable()`, `op_hashjoinable()`. **Checked on:** PostgreSQL 12.
+
+In PostgreSQL 12, `pg_operator` is the [catalog](#catalog) with one row per operator, such as `=` on `int4`. Two of its boolean columns tell the [planner](#planner) which join methods an operator can drive. `oprcanmerge` marks it as usable by a [merge join](#merge-join), and `oprcanhash` as usable by a [hash join](#hash-join); both default to false ([pg_operator.h:49-52](../raw/postgres-12/src/include/catalog/pg_operator.h#L49-L52)). The built-in rows come from `pg_operator.dat`. For example, `=` on `xid` sets only `oprcanhash` ([pg_operator.dat:180](../raw/postgres-12/src/include/catalog/pg_operator.dat#L180)). An extension sets the flags with the `HASHES` and `MERGES` options of `CREATE OPERATOR` ([create_operator.sgml:29](../raw/postgres-12/doc/src/sgml/ref/create_operator.sgml#L29)).
+
+The planner reads the flags through `op_mergejoinable()` and `op_hashjoinable()` ([lsyscache.c:1193](../raw/postgres-12/src/backend/utils/cache/lsyscache.c#L1193), [lsyscache.c:1244](../raw/postgres-12/src/backend/utils/cache/lsyscache.c#L1244)). A set flag is not enough on its own:
+
+| Case | What decides it |
+|---|---|
+| Merge flag set | The clause is mergejoinable only if the operator belongs to a B-tree [operator family](#operator-class) ([initsplan.c:2602-2606](../raw/postgres-12/src/backend/optimizer/plan/initsplan.c#L2602-L2606)) |
+| Hash flag set | The operator must have a matching hash operator family entry ([lsyscache.c:1235-1236](../raw/postgres-12/src/backend/utils/cache/lsyscache.c#L1235-L1236)) |
+| Array or record equality | The type cache decides per element type ([lsyscache.c:1205-1216](../raw/postgres-12/src/backend/utils/cache/lsyscache.c#L1205-L1216), [lsyscache.c:1252](../raw/postgres-12/src/backend/utils/cache/lsyscache.c#L1252)) |
+| Volatile function in the clause | Neither flag is used ([initsplan.c:2598-2600](../raw/postgres-12/src/backend/optimizer/plan/initsplan.c#L2598-L2600), [initsplan.c:2635-2637](../raw/postgres-12/src/backend/optimizer/plan/initsplan.c#L2635-L2637)) |
+
+Related: [Merge join](#merge-join), [Hash join](#hash-join), [Nested loop join](#nested-loop-join), [Operator class](#operator-class), [Catalog](#catalog)
+
 ### pg_plan_advice
 
 **Aliases:** plan advice, advice string, advice tag, advice feedback, relation identifier, `EXPLAIN (PLAN_ADVICE)`, `pg_plan_advice.advice`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -5261,7 +5281,7 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (424 files):
+**PostgreSQL 12** (430 files):
 
 - [auto_explain.c:95-105](../raw/postgres-12/contrib/auto_explain/auto_explain.c#L95-L105)
 - [pg_buffercache_pages.c:164-167](../raw/postgres-12/contrib/pg_buffercache/pg_buffercache_pages.c#L164-L167)
@@ -5345,6 +5365,7 @@ One representative citation per cited source file, grouped by version:
 - [ref/alter_table.sgml:368-370](../raw/postgres-12/doc/src/sgml/ref/alter_table.sgml#L368-L370)
 - [ref/cluster.sgml:44-48](../raw/postgres-12/doc/src/sgml/ref/cluster.sgml#L44-L48)
 - [ref/create_index.sgml#sql-createindex-concurrently](../raw/postgres-12/doc/src/sgml/ref/create_index.sgml#L544-L556)
+- [ref/create_operator.sgml:29](../raw/postgres-12/doc/src/sgml/ref/create_operator.sgml#L29)
 - [ref/create_table.sgml#reloption-fillfactor](../raw/postgres-12/doc/src/sgml/ref/create_table.sgml#L1319-L1337)
 - [ref/drop_index.sgml:46-50](../raw/postgres-12/doc/src/sgml/ref/drop_index.sgml#L46-L50)
 - [ref/explain.sgml:171-190](../raw/postgres-12/doc/src/sgml/ref/explain.sgml#L171-L190)
@@ -5541,6 +5562,7 @@ One representative citation per cited source file, grouped by version:
 - [ruleutils.c#T_PartitionBoundSpec](../raw/postgres-12/src/backend/utils/adt/ruleutils.c#L8945-L8993)
 - [selfuncs.c:6119-6124](../raw/postgres-12/src/backend/utils/adt/selfuncs.c#L6119-L6124)
 - [inval.c:681](../raw/postgres-12/src/backend/utils/cache/inval.c#L681)
+- [lsyscache.c:1193](../raw/postgres-12/src/backend/utils/cache/lsyscache.c#L1193)
 - [plancache.c#choose_custom_plan](../raw/postgres-12/src/backend/utils/cache/plancache.c#L1016-L1063)
 - [relcache.c#RelationSetNewRelfilenode](../raw/postgres-12/src/backend/utils/cache/relcache.c#L3404-L3419)
 - [relmapper.c:1-28](../raw/postgres-12/src/backend/utils/cache/relmapper.c#L1-L28)
@@ -5611,6 +5633,8 @@ One representative citation per cited source file, grouped by version:
 - [pg_index.h:34](../raw/postgres-12/src/include/catalog/pg_index.h#L34)
 - [pg_inherits.h#FormData_pg_inherits](../raw/postgres-12/src/include/catalog/pg_inherits.h#L32-L37)
 - [pg_opclass.h#FormData_pg_opclass](../raw/postgres-12/src/include/catalog/pg_opclass.h#L49-L76)
+- [pg_operator.dat:180](../raw/postgres-12/src/include/catalog/pg_operator.dat#L180)
+- [pg_operator.h:49-52](../raw/postgres-12/src/include/catalog/pg_operator.h#L49-L52)
 - [pg_opfamily.h#FormData_pg_opfamily](../raw/postgres-12/src/include/catalog/pg_opfamily.h#L29-L44)
 - [pg_partitioned_table.h#FormData_pg_partitioned_table](../raw/postgres-12/src/include/catalog/pg_partitioned_table.h#L30-L54)
 - [pg_pltemplate.dat:15-17](../raw/postgres-12/src/include/catalog/pg_pltemplate.dat#L15-L17)
