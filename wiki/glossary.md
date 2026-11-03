@@ -584,7 +584,7 @@ Related: [Background worker](#background-worker), [Logical replication](#logical
 
 An arbiter index is a unique index, or the index behind an exclusion constraint, that `INSERT ... ON CONFLICT` uses to decide whether a new row conflicts with an existing one. The planner picks the arbiters in `infer_arbiter_indexes()`, and `make_modifytable()` stores their OIDs in the [ModifyTable](#modifytable) node's `arbiterIndexes` list ([createplan.c:7100](../raw/postgres-17/src/backend/optimizer/plan/createplan.c#L7100), [plancat.c#infer_arbiter_indexes](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L683-L710)). Inference needs an exact match of the conflict target's columns or expressions, in any order, and accepts a partial unique index when the target's `WHERE` predicate restricts the insert to rows the index covers (same comment). It skips an index that is not valid ([plancat.c:821-822](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L821-L822)).
 
-Three cases matter when reading the source. `ON CONFLICT DO NOTHING` with neither a conflict target nor a constraint name infers no arbiter at all ([plancat.c:730-737](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L730-L737)); the executor then treats a violation of any unique or exclusion index as a conflict, because an empty `arbiterIndexes` list makes it check every such index ([execIndexing.c#ExecCheckIndexConstraints](../raw/postgres-17/src/backend/executor/execIndexing.c#L517-L518), [execIndexing.c:585-588](../raw/postgres-17/src/backend/executor/execIndexing.c#L585-L588)). A named target or constraint that matches no index is an error ([plancat.c:946-950](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L946-L950)). And `ON CONSTRAINT` naming an exclusion constraint is rejected for `DO UPDATE` ([plancat.c:835-840](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L835-L840)).
+Three cases matter when reading the source. `ON CONFLICT DO NOTHING` with neither a conflict target nor a constraint name infers no arbiter at all ([plancat.c:730-737](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L730-L737)); the executor then checks every unique or exclusion index that is ready for inserts, because an empty `arbiterIndexes` list selects them all; it skips an index not yet ready for inserts, and reaching a deferrable (not immediate) one raises an error ([execIndexing.c#ExecCheckIndexConstraints](../raw/postgres-17/src/backend/executor/execIndexing.c#L517-L518), [execIndexing.c:580-595](../raw/postgres-17/src/backend/executor/execIndexing.c#L580-L595)). A named target or constraint that matches no index is an error ([plancat.c:946-950](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L946-L950)). And `ON CONSTRAINT` naming an exclusion constraint is rejected for `DO UPDATE` ([plancat.c:835-840](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L835-L840)).
 
 Related: [Speculative insertion](#speculative-insertion), [ModifyTable](#modifytable), [Invalid index](#invalid-index)
 
@@ -618,12 +618,13 @@ Related: [Buffer manager](#buffer-manager), [Read stream](#read-stream), [shared
 
 ### auto_explain
 
-**Checked on:** PostgreSQL 12.
+**Checked on:** PostgreSQL 12, 17.
 
 `auto_explain` is a [contrib](#contrib) module that logs the execution plans of slow statements automatically, without running `EXPLAIN` by hand ([auto-explain.sgml:11-16](../raw/postgres-12/doc/src/sgml/auto-explain.sgml#L11-L16)). It has no SQL functions and works once loaded into a session or preloaded ([auto-explain.sgml:20-30](../raw/postgres-12/doc/src/sgml/auto-explain.sgml#L20-L30)). It logs nothing by default, because `auto_explain.log_min_duration` starts at `-1` ([auto_explain.c:95-105](../raw/postgres-12/contrib/auto_explain/auto_explain.c#L95-L105)).
 
 **Version notes:**
 - PostgreSQL 12: Holds. Buffer counts appear only with both `log_analyze` and `log_buffers` on ([auto_explain.c:273-282](../raw/postgres-12/contrib/auto_explain/auto_explain.c#L273-L282)).
+- PostgreSQL 17: Holds. The module has no SQL functions and is loaded per session or preloaded ([auto-explain.sgml:18-30](../raw/postgres-17/doc/src/sgml/auto-explain.sgml#L18-L30)). `auto_explain.log_min_duration` boots at `-1`, which turns logging off, and is `PGC_SUSET` ([auto_explain.c:96-106](../raw/postgres-17/contrib/auto_explain/auto_explain.c#L96-L106)). It works through the executor hooks it installs at load time ([auto_explain.c:248-255](../raw/postgres-17/contrib/auto_explain/auto_explain.c#L248-L255)).
 
 Related: [Contrib](#contrib), [EXPLAIN BUFFERS](#explain-buffers), [Plan node instrumentation](#plan-node-instrumentation)
 
@@ -1896,7 +1897,7 @@ Hash aggregation groups rows by putting each group in an in-memory hash table in
 
 Its memory budget is `work_mem` times `hash_mem_multiplier`, whose boot value is 2.0 ([nodeHash.c#get_hash_memory_limit](../raw/postgres-17/src/backend/executor/nodeHash.c#L3601-L3613), [guc_tables.c#hash_mem_multiplier](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3833-L3842)). When the estimated groups do not fit, `hash_agg_set_limits()` lowers the limit to leave room for spill partitions ([nodeAgg.c#hash_agg_set_limits](../raw/postgres-17/src/backend/executor/nodeAgg.c#L1798-L1846)). `cost_agg()` then charges the predicted spill: spilled pages written at `random_page_cost` (in the startup cost too) and read back at `seq_page_cost`, both doubled as a generic I/O penalty, plus a CPU charge per spilled tuple ([costsize.c#cost_agg-spill](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L2742-L2812)). While running, the executor enters spill mode once the table's memory or group count passes the limit; rows of new groups are then written to disk and processed in later batches ([nodeAgg.c#hash_agg_check_limits](../raw/postgres-17/src/backend/executor/nodeAgg.c#L1856-L1874), [nodeAgg.c#hash_agg_enter_spill_mode](../raw/postgres-17/src/backend/executor/nodeAgg.c#L1876-L1886)).
 
-`enable_hashagg = off` does not remove the path: `cost_agg()` adds [disable_cost](#disable_cost) to hashed and mixed aggregation ([costsize.c#cost_agg-disable](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L2708-L2727), [guc_tables.c#enable_hashagg](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L854-L862)).
+For `GROUP BY`, grouping sets and the hashed `UNION` path, `enable_hashagg = off` does not remove the path: `cost_agg()` adds [disable_cost](#disable_cost) to hashed and mixed aggregation ([costsize.c#cost_agg-disable](../raw/postgres-17/src/backend/optimizer/path/costsize.c#L2708-L2727), [guc_tables.c#enable_hashagg](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L854-L862)). In three places it is a hard switch instead. `DISTINCT` skips hashing when a sorted path exists, partial (parallel) `DISTINCT` never builds a hashed path, and `INTERSECT` and `EXCEPT` prefer sorting when sorting is possible ([planner.c:5262-5267](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L5262-L5267), [planner.c:5038-5044](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L5038-L5044), [prepunion.c:1322-1324](../raw/postgres-17/src/backend/optimizer/prep/prepunion.c#L1322-L1324)).
 
 Related: [work_mem](#work_mem), [Grouping sets](#grouping-sets), [Partial aggregation](#partial-aggregation), [Hash join](#hash-join), [DISTINCT ON](#distinct-on)
 
@@ -2548,9 +2549,13 @@ Related: [Nested loop join](#nested-loop-join), [Merge join](#merge-join), [Memo
 
 ### Materialized view
 
-**Aliases:** matview, `RELKIND_MATVIEW`, `relispopulated`. **Checked on:** PostgreSQL 12.
+**Aliases:** matview, `RELKIND_MATVIEW`, `relispopulated`. **Checked on:** PostgreSQL 12, 17.
 
 A materialized view stores the results of a query in a table-like relation. Ordinary reads return those stored rows rather than running the defining query again: the rewriter skips its SELECT rule. `REFRESH MATERIALIZED VIEW` is the operation that regenerates its data ([rules.sgml#materialized-views](../raw/postgres-12/doc/src/sgml/rules.sgml#L898-L929), [rewriteHandler.c#materialized-view-reads](../raw/postgres-12/src/backend/rewrite/rewriteHandler.c#L1900-L1911)). Its `pg_class.relkind` is `'m'`, and `relispopulated` records whether it has query results; an unpopulated materialized view is not an ordinary empty table, because executing a scan of it raises an error ([pg_class.h#materialized-state](../raw/postgres-12/src/include/catalog/pg_class.h#L110-L117), [pg_class.h#RELKIND_MATVIEW](../raw/postgres-12/src/include/catalog/pg_class.h#L159), [execUtils.c#unpopulated-scan](../raw/postgres-12/src/backend/executor/execUtils.c#L694-L714)).
+
+
+**Version notes:**
+- PostgreSQL 17: Holds. The rewriter skips a materialized view's rule ([rewriteHandler.c:2094-2095](../raw/postgres-17/src/backend/rewrite/rewriteHandler.c#L2094-L2095)); `relkind` is `'m'` and `relispopulated` defaults to true ([pg_class.h:169](../raw/postgres-17/src/include/catalog/pg_class.h#L169), [pg_class.h:114](../raw/postgres-17/src/include/catalog/pg_class.h#L114)); scanning an unpopulated one raises an error unless the query is only explained or created `WITH NO DATA` ([execUtils.c:709-715](../raw/postgres-17/src/backend/executor/execUtils.c#L709-L715)). `CREATE MATERIALIZED VIEW` always creates the relation empty; with data, it then fills it through the `REFRESH` path, which plans the query with parallel plans allowed ([createas.c:265-270](../raw/postgres-17/src/backend/commands/createas.c#L265-L270), [createas.c:345-350](../raw/postgres-17/src/backend/commands/createas.c#L345-L350), [matview.c:412](../raw/postgres-17/src/backend/commands/matview.c#L412)).
 
 Related: [Relation](#relation), [Heap](#heap), [Rewriter](#rewriter), [pg_class](#pg_class)
 
@@ -3928,7 +3933,7 @@ Related: [Path](#path), [IndexOptInfo](#indexoptinfo), [Planner](#planner), [rel
 
 **Aliases:** `pg_class.reltuples`, `pg_class.relpages`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
 
-These two `pg_class` columns hold a [relation](#relation)'s estimated row count and page count. Neither is always up to date, and `reltuples = -1` means unknown ([pg_class.h:61-66](../raw/postgres-17/src/include/catalog/pg_class.h#L61-L66)). [VACUUM](#vacuum), `ANALYZE`, and some DDL such as `CREATE INDEX` update them. For a table, `reltuples` counts live rows only ([catalogs.sgml#relpages](../raw/postgres-17/doc/src/sgml/catalogs.sgml#L2020-L2046), [vacuum.c#vac_update_relstats](../raw/postgres-17/src/backend/commands/vacuum.c#L1404-L1415)). The [planner](#planner) does not use `relpages` as the size. It takes the current block count and multiplies it by the density `reltuples / relpages` ([tableam.c#table_block_relation_estimate_size](../raw/postgres-17/src/backend/access/table/tableam.c#L666-L667), [tableam.c:711-713](../raw/postgres-17/src/backend/access/table/tableam.c#L711-L713)). For a table never vacuumed or analyzed (`reltuples` is -1), it counts fewer than 10 pages as 10 unless the table has inheritance children, and it estimates the density from column widths and fillfactor instead ([tableam.c:675-699](../raw/postgres-17/src/backend/access/table/tableam.c#L675-L699), [tableam.c:714-746](../raw/postgres-17/src/backend/access/table/tableam.c#L714-L746)).
+These two `pg_class` columns hold a [relation](#relation)'s estimated row count and page count. Neither is always up to date, and `reltuples = -1` means unknown ([pg_class.h:61-66](../raw/postgres-17/src/include/catalog/pg_class.h#L61-L66)). [VACUUM](#vacuum), `ANALYZE`, and some DDL such as `CREATE INDEX` update them. For a table, `reltuples` counts live rows only ([catalogs.sgml#relpages](../raw/postgres-17/doc/src/sgml/catalogs.sgml#L2020-L2046), [vacuum.c#vac_update_relstats](../raw/postgres-17/src/backend/commands/vacuum.c#L1404-L1415)). The [planner](#planner) does not use `relpages` as the size. It takes the current block count and multiplies it by the density `reltuples / relpages`, but only when `reltuples` is not negative and `relpages` is above zero ([tableam.c#table_block_relation_estimate_size](../raw/postgres-17/src/backend/access/table/tableam.c#L666-L667), [tableam.c:711-713](../raw/postgres-17/src/backend/access/table/tableam.c#L711-L713)). Otherwise, including a table vacuumed or analyzed while empty (`relpages = 0`), it estimates the density from column widths and fillfactor. Only a table never vacuumed or analyzed (`reltuples` is -1) also has fewer than 10 pages counted as 10, unless it has inheritance children ([tableam.c:675-699](../raw/postgres-17/src/backend/access/table/tableam.c#L675-L699), [tableam.c:714-746](../raw/postgres-17/src/backend/access/table/tableam.c#L714-L746)).
 
 **Version notes:**
 - PostgreSQL 12: Differs: 12 has no `reltuples = -1` convention; the header says only "not always up-to-date", and "never vacuumed" is approximated by `relpages = 0` ([pg_class.h:59-63](../raw/postgres-12/src/include/catalog/pg_class.h#L59-L63), [heapam_handler.c#heapam_estimate_rel_size](../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L2106-L2118)). The columns hold estimated rows and pages, updated by `VACUUM`, `ANALYZE` and some DDL ([catalogs.sgml#relpages](../raw/postgres-12/doc/src/sgml/catalogs.sgml#L1760-L1785), [vacuum.c:1157](../raw/postgres-12/src/backend/commands/vacuum.c#L1157)). The planner scales the current block count by `reltuples / relpages` in `heapam_estimate_rel_size()`, not in `tableam.c`, and its no-statistics density ignores fillfactor ([heapam_handler.c:2131-2134](../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L2131-L2134), [heapam_handler.c:2155](../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L2155)).
@@ -4064,7 +4069,7 @@ Related: [MultiXact](#multixact), [xmin and xmax](#xmin-and-xmax), [Heavyweight 
 
 A row mark is the [planner](#planner)'s record that rows read from one relation must be locked, or at least found again, while the statement runs. `preprocess_rowmarks()` creates a `PlanRowMark` for each non-target relation of a `SELECT ... FOR UPDATE/SHARE`, `UPDATE`, `DELETE` or `MERGE` ([planner.c#preprocess_rowmarks](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L2291-L2295), [plannodes.h#PlanRowMark-comment](../raw/postgres-17/src/include/nodes/plannodes.h#L1339-L1346)). Its `markType` is one of four lock strengths or one of two non-locking kinds. `ROW_MARK_REFERENCE` fetches only the row's TID, and `ROW_MARK_COPY` copies the whole row when there is no TID to fetch, as for a VALUES or function scan ([plannodes.h#RowMarkType](../raw/postgres-17/src/include/nodes/plannodes.h#L1327-L1335)).
 
-The marks exist so that EvalPlanQual can recheck a row that a concurrent transaction changed, which requires finding every source row of a result row again ([plannodes.h#RowMarkType-epq](../raw/postgres-17/src/include/nodes/plannodes.h#L1314-L1323)). For that the planner adds hidden output columns named `ctid%u`, `tableoid%u` or `wholerow%u` ([plannodes.h#PlanRowMark-junk](../raw/postgres-17/src/include/nodes/plannodes.h#L1359-L1375)). With a locking clause, `grouping_planner()` puts a `LockRows` node on top, where the executor takes the [row locks](#row-lock); non-locking marks are left to the ModifyTable node ([planner.c#grouping_planner-lockrows](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L1796-L1808), [plannodes.h#LockRows](../raw/postgres-17/src/include/nodes/plannodes.h#L1247-L1261)).
+The marks exist so that EvalPlanQual can recheck a row that a concurrent transaction changed, which requires finding every source row of a result row again ([plannodes.h#RowMarkType-epq](../raw/postgres-17/src/include/nodes/plannodes.h#L1314-L1323)). For that the planner adds hidden output columns named `ctid%u`, `tableoid%u` or `wholerow%u` ([plannodes.h#PlanRowMark-junk](../raw/postgres-17/src/include/nodes/plannodes.h#L1359-L1375)). With a locking clause, `grouping_planner()` puts a `LockRows` node above the scan and join, and below any `Limit` ([planner.c:1810-1820](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L1810-L1820)), where the executor takes the [row locks](#row-lock); non-locking marks are left to the ModifyTable node ([planner.c#grouping_planner-lockrows](../raw/postgres-17/src/backend/optimizer/plan/planner.c#L1796-L1808), [plannodes.h#LockRows](../raw/postgres-17/src/include/nodes/plannodes.h#L1247-L1261)).
 
 Related: [Row lock](#row-lock), [ModifyTable](#modifytable), [TID](#tid), [Plan tree](#plan-tree), [Lock mode](#lock-mode)
 
@@ -6115,7 +6120,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-14/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-14/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 17** (532 files):
+**PostgreSQL 17** (535 files):
 
 - [configure.ac#blocksize](../raw/postgres-17/configure.ac#L258-L289)
 - [contrib/Makefile:32-38](../raw/postgres-17/contrib/Makefile#L32-L38)
@@ -6123,6 +6128,7 @@ One representative citation per cited source file, grouped by version:
 - [amcheck.control:1-3](../raw/postgres-17/contrib/amcheck/amcheck.control#L1-L3)
 - [verify_heapam.c#verify_heapam](../raw/postgres-17/contrib/amcheck/verify_heapam.c#L184-L217)
 - [verify_nbtree.c:1-14](../raw/postgres-17/contrib/amcheck/verify_nbtree.c#L1-L14)
+- [auto_explain.c:96-106](../raw/postgres-17/contrib/auto_explain/auto_explain.c#L96-L106)
 - [btree_gin.control:1-6](../raw/postgres-17/contrib/btree_gin/btree_gin.control#L1-L6)
 - [btree_gist.control:1-6](../raw/postgres-17/contrib/btree_gist/btree_gist.control#L1-L6)
 - [btreefuncs.c:165-167](../raw/postgres-17/contrib/pageinspect/btreefuncs.c#L165-L167)
@@ -6286,6 +6292,7 @@ One representative citation per cited source file, grouped by version:
 - [genbki.pl:1-7](../raw/postgres-17/src/backend/catalog/genbki.pl#L1-L7)
 - [heap.c#StorePartitionBound](../raw/postgres-17/src/backend/catalog/heap.c#L3571-L3608)
 - [index.c:3784-3785](../raw/postgres-17/src/backend/catalog/index.c#L3784-L3785)
+- [pg_inherits.c#descendant-locks](../raw/postgres-17/src/backend/catalog/pg_inherits.c#L204-L230)
 - [storage.c#RelationTruncate](../raw/postgres-17/src/backend/catalog/storage.c#L280-L289)
 - [system_functions.sql:285-289](../raw/postgres-17/src/backend/catalog/system_functions.sql#L285-L289)
 - [system_views.sql:219-225](../raw/postgres-17/src/backend/catalog/system_views.sql#L219-L225)
@@ -6314,6 +6321,7 @@ One representative citation per cited source file, grouped by version:
 - [execParallel.c:1039-1043](../raw/postgres-17/src/backend/executor/execParallel.c#L1039-L1043)
 - [execPartition.c#ExecFindPartition](../raw/postgres-17/src/backend/executor/execPartition.c#L243-L262)
 - [execProcnode.c:43-61](../raw/postgres-17/src/backend/executor/execProcnode.c#L43-L61)
+- [execUtils.c:709-715](../raw/postgres-17/src/backend/executor/execUtils.c#L709-L715)
 - [instrument.c#InstrStartNode](../raw/postgres-17/src/backend/executor/instrument.c#L66-L80)
 - [nodeAppend.c:39-40](../raw/postgres-17/src/backend/executor/nodeAppend.c#L39-L40)
 - [nodeBitmapAnd.c#MultiExecBitmapAnd](../raw/postgres-17/src/backend/executor/nodeBitmapAnd.c#L109-L167)
