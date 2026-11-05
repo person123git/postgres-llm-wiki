@@ -53,9 +53,9 @@ List all possible scenarios that lead to block zero of the objects in a schema b
 
 **Tables, materialized views and [TOAST](../../../glossary.md#toast) tables lose block zero entirely in ordinary, healthy operation.** Creating one, [`TRUNCATE`](../../../glossary.md#truncate), a [VACUUM](../../../glossary.md#vacuum) that [truncates](../../../glossary.md#truncation) the whole table, a rewrite of a table with no live rows, and the crash reset of an [unlogged relation](../../../glossary.md#unlogged-relation) all leave a main fork with zero blocks. This was measured on an isolated 12.2 build; see [Measured results](#measured-results).
 
-**A heap block zero that exists but holds no tuples is also normal.** A VACUUM that cannot or may not truncate leaves block zero with only unused [line pointers](../../../glossary.md#line-pointer). [Relation extension](../../../glossary.md#relation-extension) can leave an [all-zero page](../../../glossary.md#all-zero-page): bulk extension does so on purpose, and a crash after a single-page extension can do so by accident.
+**A heap block zero that exists but holds no tuples is also normal.** A VACUUM that cannot or may not truncate leaves block zero with only unused [line pointers](../../../glossary.md#line-pointer). Without any VACUUM, a scan that reads a nearly full page whose rows were all deleted [prunes](../../../glossary.md#pruning) it and leaves only dead line pointers. [Relation extension](../../../glossary.md#relation-extension) can leave an [all-zero page](../../../glossary.md#all-zero-page): bulk extension does so on purpose, and a crash after a single-page extension can do so by accident.
 
-**Indexes keep an initialized block zero in every ordinary path.** Every core index [access method](../../../glossary.md#access-method) writes a [metapage](../../../glossary.md#metapage) or root page there when it builds, even on an empty table. The exceptions are interrupted concurrent builds, whose catalog row already committed. A failed or cancelled `CREATE INDEX CONCURRENTLY` or `REINDEX CONCURRENTLY` can leave a B-tree with no block zero, or with an all-zero block zero; both outcomes were measured. A server crash during such a build can leave a GiST, GIN or SP-GiST block zero all-zero in the file; that case is derived from the source only. Such an index is always an [invalid index](../../../glossary.md#invalid-index). Recovery extension and outside damage, in Families B and E, can affect indexes too.
+**Indexes keep an initialized block zero in every ordinary path.** Every core index [access method](../../../glossary.md#access-method) writes a [metapage](../../../glossary.md#metapage) or root page there when it builds, even on an empty table. The exceptions are interrupted concurrent builds, whose catalog row already committed. A failed or cancelled `CREATE INDEX CONCURRENTLY` can leave a B-tree with no block zero, or with an all-zero block zero; both outcomes were measured. `REINDEX CONCURRENTLY` builds its copy through the same code, so it can leave the same two states; that is derived from the source and was not measured. A server crash during such a build can leave a GiST, GIN or SP-GiST block zero all-zero in the file; that case is derived from the source only. Such an index is always an [invalid index](../../../glossary.md#invalid-index). Recovery extension and outside damage, in Families B and E, can affect indexes too.
 
 **Sequences always keep block zero with one tuple** on the paths examined here, because the code that creates or resets a sequence writes that tuple in the same step.
 
@@ -74,11 +74,11 @@ A page starts with a 24-byte header. Two header fields decide the states below: 
 | S2 | Block zero exists and is all zero bytes | Bytes in the file or in a shared buffer | `page_header()` shows `lsn 0/0`, `lower 0`, `upper 0` |
 | S3 | Block zero is initialized and has no line pointers | `pd_lower` equals the 24-byte header size | `page_header()` shows `lower 24` |
 | S4 | A heap block zero has line pointers but no stored tuple | Every line pointer is unused or dead | `heap_page_items()` shows no `lp_flags` 1 or 2 row |
-| S5 | An index block zero is a metapage or root page of an index with no entries | The access method's build or empty-build code | For a B-tree, `bt_metap()` shows `root 0` and `level 0` |
+| S5 | An index block zero is the metapage of an index with no entries. GiST has no metapage: its empty block zero is a root page without line pointers, which is S3 | The access method's build or empty-build code | For a B-tree, `bt_metap()` shows `root 0` and `level 0` |
 
 **S2 needs one extra caution.** A read goes to [shared buffers](../../../glossary.md#buffer-manager) first. So a backend can see an initialized page in a buffer while the file still holds zeros, and the reverse ([bufmgr.c#buffer-hit](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L745-L757)). The SQL inspection functions read through that same buffer path ([rawpage.c#get_raw_page_internal](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L95-L172)). Crash-related S2 cases are about the file, which is what survives the crash.
 
-**S2 is never rejected as corrupt.** `PageIsVerified()` accepts a page that is entirely zero, with or without [data checksums](../../../glossary.md#data-checksums), because an all-zero page is not evidence of damage on its own ([bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L82-L150)).
+**S2 passes the read-time check, but index code rejects it.** `PageIsVerified()`, which the buffer manager runs on every page it reads from disk, accepts a page that is entirely zero, with or without [data checksums](../../../glossary.md#data-checksums), because an all-zero page is not evidence of damage on its own ([bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L82-L150)). So reading the page never fails, and a heap treats it as free space. B-tree, GiST and hash code that then uses the page as an index page raises an `ERRCODE_INDEX_CORRUPTED` error, "index ... contains unexpected zero page", and hints to REINDEX ([nbtpage.c#_bt_checkpage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L692-L708), [gistutil.c:778-787](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L778-L787), [hashutil.c:232-241](../../../../raw/postgres-12/src/backend/access/hash/hashutil.c#L232-L241)).
 
 ### Which objects have a block zero, and what it holds
 
@@ -132,12 +132,14 @@ Does the object have storage? (relkind r, m, t, i or S)
         +-- initialized, no line pointers (S3)
         |   +-- heap -> A7 an insert initialized the page, then failed
         |   |      or put its tuple on another page
-        |   `-- index -> GiST root of an empty index (A6)
+        |   `-- index -> GiST root of an empty index: A1/A2/A6 built
+        |          or rebuilt on an empty table, B3 unlogged reset
         |
         +-- heap page, line pointers but no tuples (S4)
-        |      -> A4 VACUUM did not truncate
+        |      -> A4 VACUUM did not truncate (unused line pointers),
+        |         A8 a scan pruned the page (dead line pointers)
         |
-        `-- index metapage of an empty index (S5)
+        `-- index metapage of an empty index (S5, every AM but GiST)
                -> A1/A2/A6 built or rebuilt on an empty table,
                   B3 unlogged index reset, A3 after VACUUM emptied it
 ```
@@ -146,16 +148,17 @@ Does the object have storage? (relkind r, m, t, i or S)
 
 | # | Scenario | Block zero becomes | Objects | Normal operation? | Survives restart? | Measured |
 |---|---|---|---|---|---|---|
-| A1 | Created and never loaded: `CREATE TABLE`, partition leaf, CTAS or matview `WITH NO DATA` or with zero rows | S1 heap, S5 index | tables, matviews, TOAST, their indexes | yes | yes | yes |
-| A2 | `TRUNCATE` | S1 heap, S5 index | tables, TOAST, indexes | yes | yes | yes |
+| A1 | Created and never loaded: `CREATE TABLE`, partition leaf, CTAS or matview `WITH NO DATA` or with zero rows | S1 heap, S5 index (S3 for GiST) | tables, matviews, TOAST, their indexes | yes | yes | yes |
+| A2 | `TRUNCATE` | S1 heap, S5 index (S3 for GiST) | tables, TOAST, indexes | yes | yes | yes |
 | A3 | All rows deleted, then VACUUM truncates to zero blocks | S1 heap; index keeps its pages | tables, TOAST | yes | yes | yes |
 | A4 | Rows deleted, VACUUM ran but did not truncate | S4 | tables, TOAST | yes | yes | yes |
 | A5 | Rewrite with no live rows: `VACUUM FULL`, `CLUSTER`, rewriting `ALTER TABLE`, `REFRESH MATERIALIZED VIEW` | S1 | tables, matviews | yes | yes | `VACUUM FULL`, `REFRESH` |
 | A6 | Index built on an empty table | S5, or S3 for GiST | indexes | yes | yes | yes |
 | A7 | An insert initialized a new page, then failed or placed its tuple elsewhere | S3 | tables, TOAST | yes, or an error | yes, once the dirty buffer is written | no |
+| A8 | Every row on the page deleted, then a scan or index fetch prunes the page before any VACUUM | S4, dead line pointers | tables, TOAST | yes | yes, once the dirty buffer is written | yes |
 | B1 | Crash after a single-page extension, before the first insert's WAL reached disk | S2 in the file | tables, TOAST | crash | yes | no |
 | B2 | Bulk extension under extension-lock contention | S2, no crash needed | tables, TOAST | yes | yes | no |
-| B3 | Unlogged relation after crash recovery, or on any server started from a base backup | S1 heap, S5 index | unlogged tables, their TOAST tables and indexes | yes, by design | is the restart | yes |
+| B3 | Unlogged relation after crash recovery, or on any server started from a base backup | S1 heap, S5 index (S3 for GiST) | unlogged tables, their TOAST tables and indexes | yes, by design | is the restart | yes |
 | B4 | Recovery replays a record for a block beyond the file's end | S2 for the gap | any WAL-logged relation | crash or standby | yes | no |
 | B5 | WAL discarded with `pg_resetwal` after a crash | S2 persists | tables | repair | yes | no |
 | B6 | `zero_damaged_pages = on` meets a damaged block zero | S2 in memory only; a later insert writes an initialized page holding its row | any | non-default setting | no, unless rewritten | no |
@@ -171,7 +174,7 @@ Does the object have storage? (relkind r, m, t, i or S)
 
 **A1. Created and never loaded.** `RelationCreateStorage()` creates only the main fork file and adds no block ([storage.c#RelationCreateStorage](../../../../raw/postgres-12/src/backend/catalog/storage.c#L70-L122)). For a table, TOAST table or materialized view, `heap_create()` reaches it through the table access method callback ([heap.c#create-storage](../../../../raw/postgres-12/src/backend/catalog/heap.c#L416-L443), [heapam_handler.c#heapam_relation_set_new_filenode](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L580-L627)). `CREATE TABLE AS ... WITH NO DATA` defines the relation without running the query at all ([createas.c#skipData](../../../../raw/postgres-12/src/backend/commands/createas.c#L298-L307)). A load that produces zero rows also writes no heap page, because a page is only added when an insert needs space ([hio.c#single-page-extension](../../../../raw/postgres-12/src/backend/access/heap/hio.c#L585-L609)). Measured: `customers`, `customer_import`, `customer_summary` and the TOAST table all had zero blocks, while the TOAST index had a B-tree metapage.
 
-**A2. TRUNCATE.** For a table that existed before the current transaction, `TRUNCATE` gives the heap and its TOAST table a new, empty relfilenode and rebuilds every index ([tablecmds.c#ExecuteTruncateGuts](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L1786-L1840)). If the table was created or given a new relfilenode in the same subtransaction, it truncates the existing file to zero blocks instead ([heapam_handler.c#nontransactional_truncate](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L630-L633)). Either way the heap ends in S1 and each index in S5. Measured: `orders` went from 109 blocks to none, its relfilenode changed, and `orders_pkey` became a single metapage.
+**A2. TRUNCATE.** For a table that existed before the current transaction, `TRUNCATE` gives the heap and its TOAST table a new, empty relfilenode and rebuilds every index ([tablecmds.c#ExecuteTruncateGuts](../../../../raw/postgres-12/src/backend/commands/tablecmds.c#L1786-L1840)). If the table was created or given a new relfilenode in the same subtransaction, it truncates the existing file to zero blocks instead ([heapam_handler.c#nontransactional_truncate](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L630-L633)). Either way the heap ends in S1. Each index ends in S5, except a GiST index, whose rebuilt block zero is an empty leaf root with no line pointers, S3 ([gistbuild.c#root-init](../../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L173-L185)). Measured: `orders` went from 109 blocks to none, its relfilenode changed, and `orders_pkey` became a single metapage. After `TRUNCATE customers`, every index on the empty `customers` table kept the block zero it had at creation, and `customers_city_gist` still read `lower 24`.
 
 **A3. DELETE everything, then VACUUM truncates.** VACUUM tracks `nonempty_pages`, one past the last page that still holds a tuple ([vacuumlazy.c:1376-1378](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1376-L1378)). It attempts [truncation](../../../glossary.md#truncation) only when the truncate option is enabled, at least 1,000 pages or one sixteenth of the table are freeable, and `old_snapshot_threshold` is disabled ([vacuumlazy.c#should_attempt_truncation](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1851-L1867), [vacuumlazy.c#REL_TRUNCATE](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L68-L72)). It then rechecks the tail under an `AccessExclusiveLock` and truncates ([vacuumlazy.c#truncate](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1947-L1992)). A page whose line pointers are all unused counts as deletable ([vacuumlazy.c#count_nondeletable_pages](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L2092-L2125)). So when every row is gone, the table is cut to zero blocks. Measured: `orders` went from 109 blocks to none. Its index did not shrink: `orders_pkey` kept 57 blocks with block zero still a metapage, because only the heap is truncated.
 
@@ -182,10 +185,11 @@ Does the object have storage? (relkind r, m, t, i or S)
 | Storage parameter `vacuum_truncate = false` | `true` ([reloptions.c#vacuum_truncate](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L152-L160)) | `vacuum_rel()` copies the parameter into the truncate option when the command gave none ([vacuum.c#truncate-option](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1782-L1790)), and a disabled option returns false at once ([vacuumlazy.c:1856-1857](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1856-L1857)) |
 | `VACUUM (TRUNCATE false)` | option absent, so the parameter decides | The same disabled option, for that command only |
 | `old_snapshot_threshold` set to 0 or more | `-1`, disabled ([guc.c#old_snapshot_threshold](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3041-L3049)) | Truncation would hide pages that a "snapshot too old" check needs ([vacuumlazy.c#should_attempt_truncation](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1833-L1867)) |
-| A live tuple remains on a later page | — | `nonempty_pages` stays past block zero, so nothing up to that page is freeable |
-| Too few freeable pages | — | Fewer than 1,000 pages and less than one sixteenth of the table |
+| A live tuple remains on a later page | — | `nonempty_pages` stays past block zero, so nothing up to that page is freeable. If the freeable tail is also shorter than 1,000 pages and one sixteenth of the table, VACUUM does not even try |
 | The exclusive lock is not granted within about 5 seconds, or another backend waits for it | — | VACUUM gives up or stops truncating early ([vacuumlazy.c#lock-retry](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1899-L1922)) |
-| VACUUM has not run yet | — | Deleted rows stay as stored tuples, so block zero is not empty at all |
+| VACUUM has not run yet | — | Deleted rows stay as stored tuples until a scan prunes the page, which is A8 |
+
+The size threshold never blocks the block-zero case on its own. When no page holds a tuple, `nonempty_pages` is 0, so `possibly_freeable` equals `rel_pages`, which is always at least `rel_pages / 16` ([vacuumlazy.c:1859-1863](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1859-L1863)).
 
 Measured: `order_archive` with `vacuum_truncate = false`, `order_audit` after `VACUUM (TRUNCATE false)`, and `order_events` with one live row on its last page each kept 109 blocks. Block zero had `lower 764` and `upper 8192`, which is 185 line pointers, all with `lp_flags` 0 (unused).
 
@@ -194,6 +198,15 @@ Measured: `order_archive` with `vacuum_truncate = false`, `order_audit` after `V
 **A6. An index built on an empty table.** Each access method initializes block zero before it reads any heap tuple, as the table in [Which objects have a block zero](#which-objects-have-a-block-zero-and-what-it-holds) shows. The B-tree is the exception in order only: it writes the metapage last, which matters in Family C. Measured on the empty `customers` table: the B-tree, GIN, SP-GiST, BRIN and hash indexes had initialized metapages, and the GiST root had no line pointers.
 
 **A7. A page initialized for an insert that did not stay.** When an insert picks an all-zero page from the free space map, `RelationGetBufferForTuple()` initializes it and marks the buffer dirty before it checks whether the tuple fits ([hio.c#init-on-use](../../../../raw/postgres-12/src/backend/access/heap/hio.c#L486-L508)). If the tuple plus the page's fillfactor reserve does not fit, the insert moves on and leaves the page initialized with no line pointer. An ERROR after the initialization has the same effect, and the VACUUM code names that case ([vacuumlazy.c#empty-page](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L930-L960)). The result is S3, an [empty page](../../../glossary.md#empty-page). VACUUM marks such a page all-visible and WAL-logs it if it never was. Block zero reaches this state only if it was an all-zero page first, as in B1 or B2.
+
+**A8. Deleted rows pruned by a later read.** A `DELETE` leaves each tuple in place and records the deleting transaction in the page's prune hint ([heapam.c:2702](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L2702)). Every sequential scan, and every index fetch that moves to a new heap page, calls `heap_page_prune_opt()` on the page it reads ([heapam.c:394](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L394), [heapam_handler.c:138-143](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L138-L143)). That function prunes only when four conditions hold:
+
+1. The server is not in recovery, because pruning writes WAL ([pruneheap.c:78-84](../../../../raw/postgres-12/src/backend/access/heap/pruneheap.c#L78-L84)).
+2. The prune hint is older than the oldest transaction any session may still see, so no snapshot can need the deleted rows ([pruneheap.c:110-118](../../../../raw/postgres-12/src/backend/access/heap/pruneheap.c#L110-L118)).
+3. The page is full, or its free space is below the larger of the table's fillfactor reserve and 10% of the block ([pruneheap.c:120-136](../../../../raw/postgres-12/src/backend/access/heap/pruneheap.c#L120-L136)).
+4. It gets the buffer's cleanup lock without waiting ([pruneheap.c:138-140](../../../../raw/postgres-12/src/backend/access/heap/pruneheap.c#L138-L140)).
+
+Pruning then marks the root line pointer of each dead chain dead ([pruneheap.c:595-601](../../../../raw/postgres-12/src/backend/access/heap/pruneheap.c#L595-L601)) and compacts the page ([pruneheap.c:725](../../../../raw/postgres-12/src/backend/access/heap/pruneheap.c#L725)). The line pointer array keeps its length. So a page whose rows were all deleted becomes S4 with `lp_flags` 3 (dead) and no VACUUM at all. A page with more free space than condition 3 allows keeps its deleted tuples until VACUUM runs. Measured: `order_returns` had 20,000 rows on 109 blocks. After `DELETE` and one `count(*)` scan, block zero had `lower 764`, `upper 8192` and 185 dead line pointers.
 
 ### Family B: crashes, recovery and repair settings
 
@@ -208,7 +221,7 @@ The VACUUM code names exactly this case as a source of all-zero pages and treats
 
 **B2. Bulk extension.** When a backend has to wait for the relation extension lock, it extends by `20` pages per waiter, up to 512, records each new page in the [free space map](../../../glossary.md#free-space-map) and deliberately does not initialize it ([hio.c#contended-extension](../../../../raw/postgres-12/src/backend/access/heap/hio.c#L555-L582), [hio.c#RelationAddExtraBlocks](../../../../raw/postgres-12/src/backend/access/heap/hio.c#L186-L261)). A page is initialized only when an insert later picks it ([hio.c#init-on-use](../../../../raw/postgres-12/src/backend/access/heap/hio.c#L486-L500)). So unused bulk-extended pages stay all-zero with no crash at all. Block zero is in that set only when several sessions insert into a still-empty table at once. Commit `0d1fe9f74e3` (2019-02-03, in 12) made this the design: it moved page initialization out of `RelationAddExtraBlocks()` and made VACUUM accept uninitialized pages as normal free space.
 
-**B3. Unlogged relations after recovery.** A server that needs recovery first removes every fork of each relation that has an init fork, except the init fork, and after replay copies the init fork over the main fork ([xlog.c#recovery-gate](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6728-L6749), [xlog.c#unlogged-cleanup](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6878-L6884), [xlog.c#unlogged-init](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L7323-L7331), [reinit.c#init-copy](../../../../raw/postgres-12/src/backend/storage/file/reinit.c#L274-L345)). A heap's init fork is an empty file ([heapam_handler.c#init-fork](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L616-L624)), so the table becomes S1. An index's init fork holds an empty index, so the index becomes S5 ([nbtree.c#btbuildempty](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L153-L183), [gist.c#gistbuildempty](../../../../raw/postgres-12/src/backend/access/gist/gist.c#L125-L142), [gininsert.c#ginbuildempty](../../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L434-L460), [spginsert.c#spgbuildempty](../../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L156-L201), [brin.c#brinbuildempty](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L746-L764), [hash.c#hashbuildempty](../../../../raw/postgres-12/src/backend/access/hash/hash.c#L194-L197), [storage.sgml#init-fork](../../../../raw/postgres-12/doc/src/sgml/storage.sgml#L687-L693)). A [base backup](../../../glossary.md#base-backup) leaves out every unlogged fork except the init fork ([basebackup.c#unlogged-exclusion](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1123-L1150)). A server started from one runs recovery, and the init copy happens when that recovery ends, so a standby gets the same S1 and S5 state when it is promoted ([xlog.c#unlogged-init](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L7323-L7331)). Measured: `cart_sessions` had 20,000 rows and 167 blocks; after an immediate shutdown and restart it had 0 rows and 0 blocks, and `cart_sessions_pkey` was one metapage with `root 0`.
+**B3. Unlogged relations after recovery.** A server that needs recovery first removes every fork of each relation that has an init fork, except the init fork, and after replay copies the init fork over the main fork ([xlog.c#recovery-gate](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6728-L6749), [xlog.c#unlogged-cleanup](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6878-L6884), [xlog.c#unlogged-init](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L7323-L7331), [reinit.c#init-copy](../../../../raw/postgres-12/src/backend/storage/file/reinit.c#L274-L345)). A heap's init fork is an empty file ([heapam_handler.c#init-fork](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L616-L624)), so the table becomes S1. An index's init fork holds an empty index, so the index becomes S5, or S3 for GiST, whose init fork holds only an empty leaf root ([nbtree.c#btbuildempty](../../../../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L153-L183), [gist.c#gistbuildempty](../../../../raw/postgres-12/src/backend/access/gist/gist.c#L125-L142), [gininsert.c#ginbuildempty](../../../../raw/postgres-12/src/backend/access/gin/gininsert.c#L434-L460), [spginsert.c#spgbuildempty](../../../../raw/postgres-12/src/backend/access/spgist/spginsert.c#L156-L201), [brin.c#brinbuildempty](../../../../raw/postgres-12/src/backend/access/brin/brin.c#L746-L764), [hash.c#hashbuildempty](../../../../raw/postgres-12/src/backend/access/hash/hash.c#L194-L197), [storage.sgml#init-fork](../../../../raw/postgres-12/doc/src/sgml/storage.sgml#L687-L693)). A [base backup](../../../glossary.md#base-backup) leaves out every unlogged fork except the init fork ([basebackup.c#unlogged-exclusion](../../../../raw/postgres-12/src/backend/replication/basebackup.c#L1123-L1150)). A server started from one runs recovery, and the init copy happens when that recovery ends, so a standby gets the same S1, S5 and GiST S3 states when it is promoted ([xlog.c#unlogged-init](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L7323-L7331)). Measured: `cart_sessions` had 20,000 rows and 167 blocks; after an immediate shutdown and restart it had 0 rows and 0 blocks, and `cart_sessions_pkey` was one metapage with `root 0`. The unlogged `store_locations` table went from 1,000 rows to 0 blocks, and its GiST index `store_locations_gist` became one root page with `lower 24`.
 
 **B4. Recovery extends a file to reach a block.** When a WAL record names a block past the end of the file, `XLogReadBufferExtended()` creates the file if needed and extends it one zeroed page at a time until the block exists ([xlogutils.c#XLogReadBufferExtended](../../../../raw/postgres-12/src/backend/access/transam/xlogutils.c#L437-L520)). A block in that gap stays all-zero unless a later record initializes it. During recovery a short read also returns zeros instead of an error ([md.c#mdread-short-read](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L606-L630)). Block zero lands in the gap only when the first record replayed for a file targets a later block.
 
@@ -238,7 +251,7 @@ In both measured cases `indisvalid` and `indisready` were false. The planner ign
 
 ### Family D and E: leftover files and outside causes
 
-**D1. Storage waiting to be removed.** Dropping a relation, and the old file of a `TRUNCATE` or rewrite, do not remove the first main-fork segment at once. `mdunlinkfork()` truncates it to zero bytes and registers it for removal after the next [checkpoint](../../../glossary.md#checkpoint) ([md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L323), [md.c#register_unlink_segment](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L916-L930)). Such a file has no block zero, but it also belongs to no live object. A server crash during a transaction that created storage, such as a plain `CREATE INDEX` or `CREATE TABLE AS`, leaves a different leftover: an [orphaned relation file](../../../glossary.md#orphaned-relation-file). An orderly abort writes an abort record that lists the created files, and recovery drops the files such a record lists ([xact.c#abort-record-files](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L1650-L1652), [xact.c#xact_redo_abort](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L5925-L5926)). A crash writes no abort record, so the file keeps whatever the build had written, including an all-zero B-tree block zero ([nbtsort.c#_bt_blwritepage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L652-L700)), while no catalog row points to it. The [empty relation files page](schema-empty-relation-files-failure-scenarios.md) covers this case and how to tell it from a live file.
+**D1. Storage waiting to be removed.** Dropping a permanent or unlogged relation, and the old file of a `TRUNCATE` or rewrite, do not remove the first main-fork segment at once. `mdunlinkfork()` truncates it to zero bytes and registers it for removal after the next [checkpoint](../../../glossary.md#checkpoint) ([md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L323), [md.c#register_unlink_segment](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L916-L930)). Three cases skip the stub and unlink the file at once: a temporary relation, a fork other than the main fork, and a removal replayed during recovery ([md.c:284-298](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L284-L298)). Such a file has no block zero, but it also belongs to no live object. A server crash during a transaction that created storage, such as a plain `CREATE INDEX` or `CREATE TABLE AS`, leaves a different leftover: an [orphaned relation file](../../../glossary.md#orphaned-relation-file). An orderly abort writes an abort record that lists the created files, and recovery drops the files such a record lists ([xact.c#abort-record-files](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L1650-L1652), [xact.c#xact_redo_abort](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L5925-L5926)). A crash writes no abort record, so the file keeps whatever the build had written, including an all-zero B-tree block zero ([nbtsort.c#_bt_blwritepage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtsort.c#L652-L700)), while no catalog row points to it. The [empty relation files page](schema-empty-relation-files-failure-scenarios.md) covers this case and how to tell it from a live file.
 
 **E1. Outside causes.** Truncating or zero-filling a file from outside the server, losing data in the filesystem, or restoring a file copied while it was being extended can leave S1 or S2. The source does not create these states; it only tolerates them: an all-zero page passes verification ([bufpage.c#PageIsVerified](../../../../raw/postgres-12/src/backend/storage/page/bufpage.c#L82-L150)) and VACUUM treats it as free space ([vacuumlazy.c#new-page-handling](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L885-L928)). The [manually zeroed relation file page](zeroed-relation-file.md) and the [zeroed last segment checker](zeroed-last-segment-check-all-tables.md) show what reads report after such a change.
 
@@ -258,10 +271,11 @@ The free space map and [visibility map](../../../glossary.md#visibility-map) for
 | Crash before the first insert's WAL is flushed | file S2 | S2 stays | VACUUM records the page as free space. |
 | Commit and checkpoint | buffer initialized | file matches | — |
 | DELETE of all rows | tuples present | tuples present, deleted | Scans return no rows; the page is not empty yet. |
-| VACUUM after every row died, truncation allowed and thresholds met | deleted tuples | S1 | Block zero is gone. |
-| VACUUM, truncation skipped | deleted tuples | S4 | Later inserts reuse the unused line pointers. |
+| First scan after the DELETE, page nearly full, no older snapshot | deleted tuples | S4, dead line pointers | A8. VACUUM later marks them unused. |
+| VACUUM after every row died, truncation allowed and thresholds met | deleted tuples or dead line pointers | S1 | Block zero is gone. |
+| VACUUM, truncation skipped | deleted tuples or dead line pointers | S4, unused line pointers | Later inserts reuse the unused line pointers. |
 | TRUNCATE or rewrite with no rows | any | S1 in a new relfilenode | The old file becomes a D1 stub. |
-| Crash, then recovery, unlogged table | any | S1 heap, S5 index | Committed rows are gone. |
+| Crash, then recovery, unlogged table | any | S1 heap, S5 index (S3 for GiST) | Committed rows are gone. |
 | CIC build starts | S1 | B-tree: S1 during the sort, S2 once leaves are written, metapage at the end | Failure freezes whichever state was reached. |
 | REINDEX of the invalid index | S1 or S2 | new relfilenode with a metapage | The index becomes valid. |
 
@@ -269,7 +283,7 @@ The free space map and [visibility map](../../../glossary.md#visibility-map) for
 
 | Setting | Default | Non-default effect | Mechanism | How to change it |
 |---|---|---|---|---|
-| `vacuum_truncate` storage parameter | `true` ([reloptions.c#vacuum_truncate](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L152-L160)) | `false` turns A3 into A4 | Copied into the VACUUM truncate option ([vacuum.c#truncate-option](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1782-L1790)) | `ALTER TABLE ... SET (vacuum_truncate = false)`, which takes `ShareUpdateExclusiveLock` |
+| `vacuum_truncate` storage parameter | `true` ([reloptions.c#vacuum_truncate](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L152-L160)) | `false` turns A3 into A4 | Copied into the VACUUM truncate option ([vacuum.c#truncate-option](../../../../raw/postgres-12/src/backend/commands/vacuum.c#L1782-L1790)) | `ALTER TABLE ... SET (vacuum_truncate = false)`, which takes `ShareUpdateExclusiveLock` ([reloptions.c:157](../../../../raw/postgres-12/src/backend/access/common/reloptions.c#L157)) |
 | `VACUUM (TRUNCATE false)` | option absent | the same, for one command | the same | Per command |
 | `old_snapshot_threshold` | `-1` ([guc.c#old_snapshot_threshold](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3041-L3049)) | 0 or more turns A3 into A4 | `should_attempt_truncation()` returns false ([vacuumlazy.c:1860-1863](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1860-L1863)) | `PGC_POSTMASTER`: restart |
 | `zero_damaged_pages` | `off` ([guc.c#zero_damaged_pages](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1150-L1161)) | `on` gives B6 | `ReadBuffer_common()` zeroes instead of raising an error ([bufmgr.c#verify-or-zero](../../../../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L924)) | `PGC_SUSET`: superuser `SET` in a session |
@@ -288,7 +302,7 @@ The query below lists every storage-bearing relation of one schema, plus its TOA
 - **Exclusions:** temporary relations are skipped, because `get_raw_page()` refuses other sessions' temporary tables ([rawpage.c#other-temp](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L138-L146)).
 
 ```sql
--- Run in psql as a superuser: psql -X -v target_schema=sales -f inventory.sql
+-- Run in psql as a superuser: psql -X -v ON_ERROR_STOP=1 -v target_schema=sales -f inventory.sql
 SET /* wiki_blk0_inventory */ statement_timeout = '60s';
 SET /* wiki_blk0_inventory */ lock_timeout = '5s';
 WITH /* wiki_blk0_inventory */ targets AS (
@@ -333,7 +347,7 @@ How the query decides, row by row:
 1. `pg_relation_size()` gives the live length of the main fork. Zero blocks is S1, and `get_raw_page()` is then not called, because it would fail on a block that does not exist ([rawpage.c#out-of-range](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L148-L152)).
 2. `page_header()` returns `upper = 0` only for an uninitialized page, which is S2.
 3. `lower <= 24` means no line pointer, which is S3.
-4. For a heap page, a line pointer with `lp_flags` 1 (normal) or 2 (redirect) means a stored tuple. None of them is S4. A deleted but not yet vacuumed tuple still counts as stored, so a table whose rows are merely deleted reads as "holds tuples".
+4. For a heap page, a line pointer with `lp_flags` 1 (normal) or 2 (redirect) means a stored tuple. None of them is S4, whether the line pointers are unused (A4) or dead (A8). A deleted tuple that no scan has pruned and no VACUUM has removed still counts as stored, so such a page reads as "holds tuples". `get_raw_page()` only copies the page under a share lock and does not prune, so the query does not change the answer it reports ([rawpage.c:159-167](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L159-L167)).
 5. For an index, the query does not decode the metapage. Use `bt_metap()` for a B-tree, or the access method's own pageinspect function, to tell S5 from a populated index. `indisvalid = false` together with S1 or S2 points to Family C.
 
 The shared-buffer view in step 2 matters for B1 and C3. Those cases describe the file, and a running server may still hold an initialized buffer for the same block. The query cannot see that difference.
@@ -350,20 +364,24 @@ Measured on 2026-11-05 on an isolated PostgreSQL 12.2 server built from the pin,
 | A6 empty GiST | `customers_city_gist` | — | 1 block, `lower 24`, no line pointers |
 | A6 sequence | `invoice_number_seq` | — | 1 block holding 1 tuple |
 | A2 TRUNCATE | `orders`, 20,000 rows | 109 blocks | 0 blocks, new relfilenode; `orders_pkey` 1 metapage block |
+| A2 TRUNCATE of an empty table | the six indexes of `customers` | as in the A6 rows | unchanged: the same block counts, GiST root `lower 24` |
 | A3 DELETE then VACUUM | `orders`, 20,000 rows | 109 blocks | 0 blocks; `orders_pkey` keeps 57 blocks |
 | A4 `vacuum_truncate = false` | `order_archive` | 109 blocks | 109 blocks; block zero `lower 764`, `upper 8192`, 185 unused line pointers |
 | A4 `VACUUM (TRUNCATE false)` | `order_audit` | 109 blocks | 109 blocks, same block zero |
 | A4 last row kept | `order_events`, all rows but the last deleted | 109 blocks | 109 blocks, same block zero |
+| A8 DELETE, then one scan, no VACUUM | `order_returns`, 20,000 rows | 109 blocks; after the DELETE, block zero holds 185 tuples (`lp_flags` 1), `upper 792` | 109 blocks; block zero `lower 764`, `upper 8192`, 185 dead line pointers (`lp_flags` 3) |
 | A5 `VACUUM FULL` | `order_archive` with no live rows | 109 blocks | 0 blocks |
 | A5 `REFRESH MATERIALIZED VIEW` | `order_event_totals`, source emptied | 1 block | 0 blocks |
 | B3 unlogged reset | `cart_sessions`, 20,000 rows | 167 blocks, 57 index blocks | 0 rows, 0 blocks; index 1 metapage block, `root 0` |
+| B3 unlogged GiST reset | `store_locations`, 1,000 rows | 7 blocks, 11 GiST blocks | 0 rows, 0 blocks; `store_locations_gist` 1 block, `lower 24` |
+| TOAST of a large table | `payments`, 3,000,001 rows, from the inventory | — | heap 37,038 blocks; its TOAST table 0 blocks |
 | C1 unique CIC failure | `payments_id_uniq` | — | 0 blocks, `indisvalid` and `indisready` false |
 | C1 CIC cancelled during leaf load | `payments_token_idx` | — | block zero all-zero (`lsn 0/0`, `upper 0`); block 1 an initialized leaf page; both flags false |
 | C1 REINDEX | `payments_token_idx` | invalid | valid, metapage at block zero |
 
-The cancelled build's block count depends on when the cancel arrived: 288 blocks after 10,441 loaded tuples in the full run and 449 blocks after 20,146 tuples in the re-run; see [Last run](#last-run). What did not vary is the state of block zero. The unlogged relations' pages carried `lsn 0/0`, because unlogged changes are not WAL-logged.
+The cancelled build's block count depends on when the cancel arrived: 288 blocks after 7,222 loaded tuples in the full run and 546 blocks after 23,188 tuples in the re-run; see [Last run](#last-run). What did not vary is the state of block zero. The unlogged heap and B-tree pages carried `lsn 0/0`, because unlogged changes are not WAL-logged. The unlogged GiST pages carried LSNs anyway: GiST stamps an unlogged page with a fake LSN from a counter ([gistutil.c#gistGetFakeLSN](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L1027-L1048)), and the reset copies the init fork page, which `gistbuildempty()` WAL-logged ([gist.c#gistbuildempty](../../../../raw/postgres-12/src/backend/access/gist/gist.c#L125-L142)).
 
-The inventory query on the same fixtures classified every relation the same way as the per-stage checks. It reported the empty GiST root as S3, `order_audit` and `order_events` as S4, `payments_id_uniq` as invalid with S1, and every heap and TOAST table listed in the table above as S1.
+The inventory query on the same fixtures classified every relation the same way as the per-stage checks. It reported both empty GiST roots as S3, `order_audit`, `order_events` and `order_returns` as S4, `payments_id_uniq` as invalid with S1, and every heap and TOAST table that the table above lists with 0 blocks as S1.
 
 ### Tests in the pinned tree
 
@@ -374,10 +392,11 @@ The inventory query on the same fixtures classified every relation the same way 
 
 ### Final causal summary
 
-- **Ordinary emptying:** a table is created, truncated, rewritten with no rows, or vacuumed after every row died → the heap's main fork has no block → block zero does not exist (S1). Its indexes are rebuilt or built empty → block zero is a metapage of an empty index (S5).
-- **VACUUM without truncation:** the rows die and VACUUM runs, but a setting, a live tail row, a size threshold or a lock blocks truncation → the line pointer array keeps its length → block zero exists with only unused line pointers (S4).
+- **Ordinary emptying:** a table is created, truncated, rewritten with no rows, or vacuumed after every row died → the heap's main fork has no block → block zero does not exist (S1). Its indexes are rebuilt or built empty → block zero is a metapage of an empty index (S5), or an empty GiST root page (S3).
+- **VACUUM without truncation:** the rows die and VACUUM runs, but a setting, a live tail row or a lock blocks truncation → the line pointer array keeps its length → block zero exists with only unused line pointers (S4).
+- **Pruning without VACUUM:** every row on a nearly full block zero is deleted and no snapshot still needs them → the next scan prunes the page → block zero keeps its line pointer array, all dead (S4).
 - **Extension without content:** a backend extends the heap → an all-zero page reaches the file at once while the content stays in a buffer → bulk-extended pages stay all-zero until used, and a crash before WAL reaches disk leaves the page all-zero (S2) → VACUUM accepts it as free space.
-- **Unlogged reset:** a crash or a base-backup start triggers recovery → the init fork replaces the main fork → the heap has no block zero and each index has an empty-index metapage.
+- **Unlogged reset:** a crash or a base-backup start triggers recovery → the init fork replaces the main fork → the heap has no block zero and each index has an empty-index metapage, or an empty root page for GiST.
 - **Interrupted concurrent B-tree build:** the empty index file commits first → the build fails during the sort (S1) or after writing leaves (S2, because the metapage comes last) → the index stays invalid until `REINDEX` or `DROP INDEX`.
 - **Schema-wide emptiness:** none of these paths selects by schema → an entire schema with empty block zeros means every object went through one of these paths, or an outside process changed the files.
 
@@ -387,14 +406,14 @@ The inventory query on the same fixtures classified every relation the same way 
 
 | Item | Value |
 |---|---|
-| Purpose | Measures the state of block zero after each scenario in Families A, B3 and C1, and runs the inventory query. It backs every number under [Measured results](#measured-results) and the measured claims in the Family sections. |
+| Purpose | Measures the state of block zero after scenarios A1 to A6, A8, B3 and C1, and runs the inventory query. It backs every number under [Measured results](#measured-results) and the measured claims in the Family sections. |
 | Invocation | Save the script below as `.wiki-runtime/tmp/blk0.sh`, then run `bash .wiki-runtime/tmp/blk0.sh [stage ...]` from the root of this wiki repository. With no stage it runs the default order. |
-| Stages | Default order `build cluster s1 s2 s3 s4 s5 stop`. `build` configures, builds and installs the pinned checkout out of tree with default `configure` options, plus `contrib/pageinspect`; it is skipped when the install records the pin. `cluster` runs `initdb` without data checksums, starts the server, creates database `shop` and the `blk0_state()` helper. `s1` creates relations that are never loaded. `s2` runs TRUNCATE, DELETE plus VACUUM, the three truncation-skip cases, VACUUM FULL and REFRESH. `s3` loads an unlogged table and restarts after an immediate shutdown. `s4` runs a failing unique CIC and a CIC cancelled during its leaf load. `s5` runs the inventory query. `stop` stops the server, runs the teardown checks and writes `summary.txt`. `clean`, not in the default order, stops the server, runs the checks and deletes the sandbox. Each SQL stage drops and recreates its own fixtures, so it can be re-run alone. |
+| Stages | Default order `build cluster s1 s2 s3 s4 s5 stop`. `build` configures, builds and installs the pinned checkout out of tree with default `configure` options, plus `contrib/pageinspect`; it is skipped when the install records the pin. `cluster` runs `initdb` without data checksums, starts the server, creates database `shop` and the `blk0_state()` helper. `s1` creates relations that are never loaded, then truncates the empty table and re-reads its indexes. `s2` runs TRUNCATE, DELETE plus VACUUM, the three truncation-skip cases, DELETE plus one scan with no VACUUM, VACUUM FULL and REFRESH. `s3` loads two unlogged tables, one with a GiST index, and restarts after an immediate shutdown. `s4` runs a failing unique CIC and a CIC cancelled during its leaf load. `s5` runs the inventory query. `stop` stops the server, runs the teardown checks and writes `summary.txt`. `clean`, not in the default order, stops the server, runs the checks and deletes the sandbox. Each SQL stage drops and recreates its own fixtures, so it can be re-run alone. |
 | Environment | `WIKI_ROOT` (`$PWD`), `SRC` (`$WIKI_ROOT/raw/postgres-12`), `SANDBOX` (`$WIKI_ROOT/.wiki-runtime/tmp/blk0`, which must lie under `.wiki-runtime/tmp`), `PORT` (`55471`), `JOBS` (`8`). The script clears `PGSERVICE`, `PGSERVICEFILE`, `PGHOSTADDR`, `PGOPTIONS`, `PGTZ`, `PGDATESTYLE` and `PGCLIENTENCODING`, and exports `PGHOST`, `PGPORT`, `PGUSER=postgres`, `PGDATABASE=shop` and `PGAPPNAME=wiki_blk0`. |
 | Prerequisites | `bash`, `git`, a C toolchain, `make`, `flex`, `bison`, `perl`, readline and zlib headers, and the POSIX `ps`, `grep -F` and `kill -0` that the teardown checks use. About 1.4 GB of disk. The pinned checkout must be at the pin with no changed tracked files. |
 | Output | `$SANDBOX/out/summary.txt`, read first: platform facts, then every stage's statements and results. Per-stage files `s1.txt` to `s5.txt`, `server.log`, and the build logs sit beside it. |
 | Runtime | About 1 minute from an empty sandbox on the last-run host, most of it the build. A re-run of `cluster s1 s2 s3 s4 s5 stop` with the build present takes about 8 seconds. |
-| Cleanup | `bash .wiki-runtime/tmp/blk0.sh clean` stops the server and deletes `$SANDBOX`, refusing a directory without the script's `.blk0-sandbox` mark; then delete `.wiki-runtime/tmp/blk0.sh`. Every invocation also stops the server on exit and runs the POSIX teardown checks: no `postmaster.pid`, no process in a `ps -A -o pid= -o args=` listing that names the data directory, `kill -0` failing for the remembered postmaster PID, no `.s.PGSQL.55471` socket or lock file, and `pg_isready` returning 2. The server never listens on TCP, so no `127.0.0.1` check is needed. |
+| Cleanup | `bash .wiki-runtime/tmp/blk0.sh clean` stops the server and deletes `$SANDBOX`, refusing a directory without the script's `.blk0-sandbox` mark; then delete `.wiki-runtime/tmp/blk0.sh`. Every invocation also stops the server on exit and runs the POSIX teardown checks: no `postmaster.pid`, no postgres process in a `ps -A -o pid= -o args=` listing that names the data directory (any other match, such as a shell, is printed for a hand check), `kill -0` failing for the remembered postmaster PID, no `.s.PGSQL.55471` socket or lock file, and `pg_isready` returning 2. The server never listens on TCP, so no `127.0.0.1` check is needed. |
 
 To extract the script from this page without retyping it, run this from the repository root. It builds the Markdown fence at run time:
 
@@ -408,24 +427,24 @@ sed -n '/^### The script/,$p' wiki/v12/questions/storage-and-vacuum/empty-block-
 
 | Item | Value |
 |---|---|
-| Date | 2026-11-05. A full run from an empty sandbox ran from 14:42:10Z to 14:43:09Z (59 seconds). A re-run of `cluster s1 s2 s3 s4 s5 stop` with the build present ran from 14:43:27Z to 14:43:35Z (8 seconds). |
-| Script | The text filed on this page, MD5 `f983cca01b1f837920d9abb053f382d2` as extracted with the command above. Two earlier runs the same day used a text without the inline tags on `SET`, `RESET`, `CHECKPOINT` and `ANALYZE` and without stage `s5`; every deterministic value they reported matches the filed run. |
+| Date | 2026-11-05, after the review fixes. A full run from an empty sandbox ran from 14:58:17Z to 14:59:19Z (62 seconds). A re-run of `cluster s1 s2 s3 s4 s5 stop` with the build present ran from 14:59:52Z to 15:00:00Z (8 seconds). |
+| Script | The text filed on this page, MD5 `d66379e6a1a55d433c740cdcdbf16e99` as extracted with the command above. It adds the A8 leg (`order_returns`), the TRUNCATE of the empty `customers` table, the unlogged GiST leg (`store_locations`), inline tags on `CREATE DATABASE` and `CREATE EXTENSION`, and a teardown check that flags only postgres programs. The earlier text, MD5 `f983cca01b1f837920d9abb053f382d2`, ran earlier the same day, as did two older texts without the inline tags on `SET`, `RESET`, `CHECKPOINT` and `ANALYZE` and without stage `s5`. Every deterministic value those runs share with the current text matches it. No fixture was renamed. |
 | Server | PostgreSQL 12.2 built from pin `45b88269a353ad93744772791feb6d01bc7e1e42` with default `configure` options, compiled by gcc 13.3.0 (Ubuntu 13.3.0-6ubuntu2~24.04.1). |
 | Platform | Linux 6.18.54.1-microsoft-standard-WSL2, x86_64. `pg_controldata`: block size 8192, 131072 blocks per segment, maximum data alignment 8, data page checksum version 0. |
-| Disk | 1,336,476 kB for the sandbox at the end of the full run, mostly the 3,000,001-row `payments` fixture and its rebuilt index. |
-| Timing-dependent values | The cancelled build was stopped after 10,441 loaded tuples with 288 index blocks in the full run, and after 20,146 tuples with 449 blocks in the re-run. The two earlier texts gave 17,314 tuples with 423 blocks and 6,178 tuples with 211 blocks. Block zero was all-zero in all four. |
-| Teardown | Every invocation's `stop` stage and exit trap found no `postmaster.pid`, no process naming the data directory, no surviving postmaster PID, no socket or lock file, and `pg_isready` status 2. The `clean` stage then deleted the sandbox, and the extracted script was deleted. |
+| Disk | 1,353,824 kB for the sandbox at the end of the full run, mostly the 3,000,001-row `payments` fixture and its rebuilt index. |
+| Timing-dependent values | The cancelled build was stopped after 7,222 loaded tuples with 288 index blocks in the full run, and after 23,188 tuples with 546 blocks in the re-run. Earlier texts gave 10,441 tuples with 288 blocks, 20,146 with 449, 17,314 with 423 and 6,178 with 211. Block zero was all-zero in all six runs. |
+| Teardown | Every invocation's `stop` stage and exit trap found no `postmaster.pid`, no postgres process naming the data directory, no surviving postmaster PID, no socket or lock file, and `pg_isready` status 2. The `clean` stage then deleted the sandbox, and the extracted script was deleted. |
 
 ### Non-default settings in the measurement
 
 | Setting or state | Value in the script | Default | Context and scope | Why the script needs it | Results that depend on it |
 |---|---|---|---|---|---|
 | `port`, `unix_socket_directories`, `listen_addresses` | `55471`, `$SANDBOX/sock`, empty, on the `pg_ctl` command line | 5432, the configure-time socket directory, `localhost` | `PGC_POSTMASTER`: set at server start ([guc.c:2177](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2177), [guc.c:3936](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3936), [guc.c:3951](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L3951)) | Isolate the cluster | None |
-| `autovacuum` | `off` on the command line | `on` | `PGC_SIGHUP`: reload ([guc.c:1426](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1426)) | Keeps background VACUUM from truncating or vacuuming a fixture between two steps | None of the measured end states: every VACUUM the results depend on is explicit. With autovacuum on, a fixture could reach its end state earlier, and the "after DELETE" rows could already show the VACUUM result. |
+| `autovacuum` | `off` on the command line | `on` | `PGC_SIGHUP`: reload ([guc.c:1426](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L1426)) | Keeps background VACUUM from truncating or vacuuming a fixture between two steps | The A8 row: it needs a page that no VACUUM touched between the `DELETE` and the scan. With autovacuum on, a worker could vacuum `order_returns` first, and block zero would then hold unused line pointers or be truncated away. No other measured end state depends on it, because every VACUUM those results depend on is explicit; with autovacuum on, the "after DELETE" rows could already show a VACUUM result. |
 | `statement_timeout`, `lock_timeout` | `5min` and `10s` through `PGOPTIONS`; the inventory also sets `60s` and `5s` | `0`, no limit | `PGC_USERSET`: session ([guc.c:2378](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2378), [guc.c:2389](../../../../raw/postgres-12/src/backend/utils/misc/guc.c#L2389)) | Stop a stuck statement | None |
 | `vacuum_truncate = false` on `order_archive`, `VACUUM (TRUNCATE false)` on `order_audit` | fixture state | `true`, option absent | storage parameter; command option | They are the A4 cases being measured | The two A4 rows; the default produced the A3 row |
-| `UNLOGGED` on `cart_sessions` | fixture state | permanent | table property | It is the B3 case | The B3 row |
-| Immediate shutdown | `pg_ctl -m immediate stop` in `s3` | fast or smart shutdown with a shutdown checkpoint | server control | Forces recovery at the next start, the B3 trigger ([xlog.c#recovery-gate](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6728-L6749)) | The B3 row. A clean shutdown does not reset unlogged tables. |
+| `UNLOGGED` on `cart_sessions` and `store_locations` | fixture state | permanent | table property | It is the B3 case | The two B3 rows |
+| Immediate shutdown | `pg_ctl -m immediate stop` in `s3` | fast or smart shutdown with a shutdown checkpoint | server control | Forces recovery at the next start, the B3 trigger ([xlog.c#recovery-gate](../../../../raw/postgres-12/src/backend/access/transam/xlog.c#L6728-L6749)) | The two B3 rows. A clean shutdown does not reset unlogged tables. |
 | Duplicate `payment_id` 1, and a cancel during the leaf load | fixture state, `pg_cancel_backend()` | — | — | They are the two C1 failure points | The two C1 rows |
 | Data checksums | off, the `initdb` default | off | fixed at `initdb` | — | None: `PageIsVerified()` accepts all-zero pages either way |
 
@@ -442,10 +461,11 @@ sed -n '/^### The script/,$p' wiki/v12/questions/storage-and-vacuum/empty-block-
 #   build    configure, build and install the pinned checkout out of tree,
 #            plus contrib/pageinspect; skipped when the install records the pin
 #   cluster  initdb (no data checksums) and start an isolated server
-#   s1       relations created and never loaded, and block 0 of empty indexes
-#   s2       TRUNCATE, DELETE plus VACUUM, vacuum_truncate off, VACUUM FULL,
-#            REFRESH MATERIALIZED VIEW
-#   s3       unlogged table and index across an immediate shutdown
+#   s1       relations created and never loaded, block 0 of empty indexes,
+#            and the same indexes after TRUNCATE of the empty table
+#   s2       TRUNCATE, DELETE plus VACUUM, vacuum_truncate off, DELETE plus
+#            one scan (pruning), VACUUM FULL, REFRESH MATERIALIZED VIEW
+#   s3       unlogged tables, B-tree and GiST, across an immediate shutdown
 #   s4       CREATE INDEX CONCURRENTLY failing in the sort, and cancelled
 #            while it loads leaf pages
 #   s5       read-only block 0 inventory of the fixtures' schema
@@ -521,8 +541,13 @@ teardown_problems() {
     grep -F -- "$DATA" "$listing" > "$listing.hits"
     while read -r pid args; do
       [ "$pid" = "$$" ] && continue
-      case "$args" in sh|sh\ *|bash|bash\ *|*/sh\ *|*/bash\ *) continue ;; esac
-      echo "process $pid still names $DATA: $args"; found=0
+      # Only the postmaster's command line names the data directory; a match
+      # that is not a postgres program is reported for a hand check instead.
+      case "$args" in
+        "$BIN/postgres"*|"$BIN/postmaster"*|postgres\ *|postmaster\ *)
+          echo "server process $pid still names $DATA: $args"; found=0 ;;
+        *) note "not a server process, check by hand: $pid $args" ;;
+      esac
     done < "$listing.hits"
     rm -f "$listing" "$listing.hits"
   else
@@ -583,8 +608,8 @@ stage_cluster() {
   "$BIN/initdb" -D "$DATA" -U postgres -A trust -E UTF8 --no-locale > "$OUT/initdb.log" 2>&1 \
     || die "initdb failed, see $OUT/initdb.log"
   start_server
-  pg -d postgres -c "CREATE DATABASE shop" >/dev/null
-  pg -c "CREATE EXTENSION pageinspect" >/dev/null
+  pg -d postgres -c "CREATE /* wiki_blk0_cluster */ DATABASE shop" >/dev/null
+  pg -c "CREATE /* wiki_blk0_cluster */ EXTENSION pageinspect" >/dev/null
   # blk0_state: describe block 0 of the main fork of one relation.
   sql cluster <<'SQL'
 CREATE /* wiki_blk0_helper */ FUNCTION blk0_state(rel regclass) RETURNS text
@@ -636,6 +661,13 @@ WHERE c.relname IN ('customers','customers_pkey','customers_city_gist','customer
 ORDER BY c.relkind, c.relname;
 SELECT /* wiki_blk0_s1 */ magic, version, root, level FROM bt_metap('customers_pkey');
 SELECT /* wiki_blk0_s1 */ count(*) AS seq_block0_tuples FROM heap_page_items(get_raw_page('invoice_number_seq', 0));
+-- A2 on an empty table: TRUNCATE rebuilds every index; the GiST root stays without line pointers
+TRUNCATE /* wiki_blk0_s1 */ customers;
+SELECT /* wiki_blk0_s1 */ 'after TRUNCATE customers' AS step, c.relname, blk0_state(c.oid)
+FROM pg_class c
+WHERE c.relname IN ('customers','customers_pkey','customers_city_gist','customers_tags_gin',
+                    'customers_city_spgist','customers_signup_brin','customers_region_hash')
+ORDER BY c.relname;
 SQL
 }
 
@@ -644,7 +676,7 @@ stage_s2() {
   rm -f "$OUT/s2.txt"
   sql s2 <<'SQL'
 SET /* wiki_blk0_s2 */ client_min_messages = warning;
-DROP /* wiki_blk0_s2 */ TABLE IF EXISTS orders, order_archive, order_audit, order_events CASCADE;
+DROP /* wiki_blk0_s2 */ TABLE IF EXISTS orders, order_archive, order_audit, order_events, order_returns CASCADE;
 DROP /* wiki_blk0_s2 */ MATERIALIZED VIEW IF EXISTS order_event_totals;
 RESET /* wiki_blk0_s2 */ client_min_messages;
 -- A2: TRUNCATE replaces the heap file and rebuilds the index
@@ -681,6 +713,15 @@ DELETE /* wiki_blk0_s2 */ FROM order_events WHERE event_id < 20000;
 VACUUM /* wiki_blk0_s2 */ order_events;
 SELECT /* wiki_blk0_s2 */ 'order_events after VACUUM, last row kept' AS step, blk0_state('order_events');
 SELECT /* wiki_blk0_s2 */ lp_flags, count(*) FROM heap_page_items(get_raw_page('order_events', 0)) GROUP BY lp_flags;
+-- A8: no VACUUM; a sequential scan prunes each full page whose rows are all deleted
+CREATE /* wiki_blk0_s2 */ TABLE order_returns (return_id int, reason text);
+INSERT /* wiki_blk0_s2 */ INTO order_returns SELECT g, 'damaged' FROM generate_series(1, 20000) g;
+DELETE /* wiki_blk0_s2 */ FROM order_returns;
+SELECT /* wiki_blk0_s2 */ 'order_returns after DELETE' AS step, blk0_state('order_returns');
+SELECT /* wiki_blk0_s2 */ lp_flags, count(*) FROM heap_page_items(get_raw_page('order_returns', 0)) GROUP BY lp_flags;
+SELECT /* wiki_blk0_s2 */ count(*) AS rows_visible FROM order_returns;
+SELECT /* wiki_blk0_s2 */ 'order_returns after one scan' AS step, blk0_state('order_returns');
+SELECT /* wiki_blk0_s2 */ lp_flags, count(*) FROM heap_page_items(get_raw_page('order_returns', 0)) GROUP BY lp_flags;
 -- A5: rewrites of a relation with no live rows write no block
 VACUUM /* wiki_blk0_s2 */ FULL order_archive;
 SELECT /* wiki_blk0_s2 */ 'order_archive after VACUUM FULL' AS step, blk0_state('order_archive');
@@ -698,13 +739,17 @@ stage_s3() {
   rm -f "$OUT/s3.txt"
   start_server
   sql s3 <<'SQL'
-DROP /* wiki_blk0_s3 */ TABLE IF EXISTS cart_sessions;
+DROP /* wiki_blk0_s3 */ TABLE IF EXISTS cart_sessions, store_locations;
 CREATE /* wiki_blk0_s3 */ UNLOGGED TABLE cart_sessions (session_id int PRIMARY KEY, cart jsonb);
 INSERT /* wiki_blk0_s3 */ INTO cart_sessions SELECT g, '{"items": 3}' FROM generate_series(1, 20000) g;
+CREATE /* wiki_blk0_s3 */ UNLOGGED TABLE store_locations (store_id int, location point);
+CREATE /* wiki_blk0_s3 */ INDEX store_locations_gist ON store_locations USING gist (location);
+INSERT /* wiki_blk0_s3 */ INTO store_locations SELECT g, point(g % 100, g / 100) FROM generate_series(1, 1000) g;
 CHECKPOINT /* wiki_blk0_s3 */;
-SELECT /* wiki_blk0_s3 */ 'before immediate shutdown' AS step, count(*) AS rows_visible FROM cart_sessions;
+SELECT /* wiki_blk0_s3 */ 'before immediate shutdown' AS step,
+       (SELECT count(*) FROM cart_sessions) AS cart_rows, (SELECT count(*) FROM store_locations) AS store_rows;
 SELECT /* wiki_blk0_s3 */ relname, blk0_state(oid) FROM pg_class
-WHERE relname IN ('cart_sessions', 'cart_sessions_pkey') ORDER BY relname;
+WHERE relname IN ('cart_sessions', 'cart_sessions_pkey', 'store_locations', 'store_locations_gist') ORDER BY relname;
 SQL
   remember_pid
   # Immediate shutdown: no shutdown checkpoint, so the next start runs crash recovery.
@@ -714,9 +759,10 @@ SQL
   grep -E 'database system was not properly shut down|redo starts|redo done' "$OUT/server.log" \
     | tail -n 3 | sed 's/^[^]]*] //' >> "$OUT/s3.txt"
   sql s3 <<'SQL'
-SELECT /* wiki_blk0_s3 */ 'after crash recovery' AS step, count(*) AS rows_visible FROM cart_sessions;
+SELECT /* wiki_blk0_s3 */ 'after crash recovery' AS step,
+       (SELECT count(*) FROM cart_sessions) AS cart_rows, (SELECT count(*) FROM store_locations) AS store_rows;
 SELECT /* wiki_blk0_s3 */ relname, blk0_state(oid) FROM pg_class
-WHERE relname IN ('cart_sessions', 'cart_sessions_pkey') ORDER BY relname;
+WHERE relname IN ('cart_sessions', 'cart_sessions_pkey', 'store_locations', 'store_locations_gist') ORDER BY relname;
 SELECT /* wiki_blk0_s3 */ magic, root, level FROM bt_metap('cart_sessions_pkey');
 SQL
 }
@@ -873,7 +919,7 @@ done
 - Extension and first insert: `hio.c`, `bufmgr.c`, `heapam.c` (insert and redo), and commit `0d1fe9f74e3`.
 - VACUUM: `vacuumlazy.c` (new and empty pages, truncation decision, lock retry, tail recheck), `vacuum.c`, `reloptions.c`, `pruneheap.c`.
 - Recovery and unlogged relations: `xlog.c`, `xlogutils.c`, `reinit.c`, `basebackup.c`, `storage.sgml`, and every access method's `buildempty` function.
-- Index builds: `nbtsort.c`, `nbtpage.c`, `nbtree.c`, `gistbuild.c`, `gist.c`, `gininsert.c`, `spginsert.c`, `brin.c`, `hash.c`, `hashpage.c`, `tuplesort.c`, `indexcmds.c`, `index.c`, `plancat.c`, `verify_nbtree.c`, `system_views.sql` (progress view phases).
+- Index builds and zero-page checks: `nbtsort.c`, `nbtpage.c`, `nbtree.c`, `gistbuild.c`, `gist.c`, `gistutil.c`, `hashutil.c`, `gininsert.c`, `spginsert.c`, `brin.c`, `hash.c`, `hashpage.c`, `tuplesort.c`, `indexcmds.c`, `index.c`, `plancat.c`, `verify_nbtree.c`, `system_views.sql` (progress view phases).
 - Settings and docs: `guc.c`, `config.sgml`, `pg_resetwal.sgml`, `copy.c`, `filemap.c`, `freespace.c`, `visibilitymap.c`, `pageinspect--1.5.sql`, `rawpage.c`.
 - Tests: `014_unlogged_reinit.pl`, `015_promotion_pages.pl`, `vacuum.sql`.
 
@@ -902,13 +948,18 @@ done
 | Invalid index handling | [plancat.c#invalid-index](../../../../raw/postgres-12/src/backend/optimizer/util/plancat.c#L200-L210), [verify_nbtree.c#invalid](../../../../raw/postgres-12/contrib/amcheck/verify_nbtree.c#L332-L337), [nbtpage.c#_bt_checkpage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L692-L708) |
 | Abort records list created files; a crash writes none | [xact.c#abort-record-files](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L1650-L1652), [xact.c#xact_redo_abort](../../../../raw/postgres-12/src/backend/access/transam/xact.c#L5925-L5926) |
 | Deferred removal of the first segment | [md.c#mdunlinkfork](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L323), [md.c#register_unlink_segment](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L916-L930) |
+| A read prunes a fully deleted page to dead line pointers | [heapam.c:2702](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L2702), [heapam.c:394](../../../../raw/postgres-12/src/backend/access/heap/heapam.c#L394), [heapam_handler.c:138-143](../../../../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L138-L143), [pruneheap.c:78-140](../../../../raw/postgres-12/src/backend/access/heap/pruneheap.c#L78-L140), [pruneheap.c:595-601](../../../../raw/postgres-12/src/backend/access/heap/pruneheap.c#L595-L601), [pruneheap.c:725](../../../../raw/postgres-12/src/backend/access/heap/pruneheap.c#L725) |
+| GiST empty index is a root page without line pointers | [gistbuild.c#root-init](../../../../raw/postgres-12/src/backend/access/gist/gistbuild.c#L173-L185), [gist.c#gistbuildempty](../../../../raw/postgres-12/src/backend/access/gist/gist.c#L125-L142) |
+| Index code rejects an all-zero page | [nbtpage.c#_bt_checkpage](../../../../raw/postgres-12/src/backend/access/nbtree/nbtpage.c#L692-L708), [gistutil.c:778-787](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L778-L787), [hashutil.c:232-241](../../../../raw/postgres-12/src/backend/access/hash/hashutil.c#L232-L241) |
+| The truncation size threshold always passes when no page holds a tuple | [vacuumlazy.c:1859-1863](../../../../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1859-L1863) |
+| Immediate unlink for temporary relations, other forks and redo | [md.c:284-298](../../../../raw/postgres-12/src/backend/storage/smgr/md.c#L284-L298) |
 | Measured states | [Measurement Script](#measurement-script), run on 2026-11-05 |
 
 ## Open Questions
 
 - **WAL-skipped loads under `wal_level = minimal`.** The `COPY` comment says the same-transaction test behind the WAL skip "is not always set correctly" after a `TRUNCATE`, `SAVEPOINT`, `TRUNCATE`, `ROLLBACK TO` sequence ([copy.c#wal-skip](../../../../raw/postgres-12/src/backend/commands/copy.c#L2729-L2741)). This page does not establish whether that case, or another WAL-skip path at the 12.2 pin, can leave a committed block zero all-zero after a crash. No test in the pinned tree covers it, and no measurement ran with `wal_level = minimal`.
 - **Crash-timing scenarios were not measured.** B1, B2, B4, B5 and C3 are derived from the source only. B2 needs concurrent inserters waiting on the extension lock, and B1, B4 and C3 need a crash at a chosen point.
-- **The cancelled-build leg is timing-dependent.** The script cancels the build once the progress view shows the leaf-load phase with at least one tuple loaded. On a faster or slower host the cancel could arrive after the metapage was written, and the leg would then report an initialized block zero. All four runs on the last-run host reached the all-zero state.
+- **The cancelled-build leg is timing-dependent.** The script cancels the build once the progress view shows the leaf-load phase with at least one tuple loaded. On a faster or slower host the cancel could arrive after the metapage was written, and the leg would then report an initialized block zero. All six runs on the last-run host reached the all-zero state.
 - **The incident, if there is one, is not established.** No affected database, file listing or log was supplied. Outside causes in E1 cannot be identified from source.
 - **The inventory reads buffers, not files.** For B1 and C3, where the file and a buffer can differ, the query reports the buffer. A file-level check needs the server stopped or a tool outside SQL.
 - **Missing concept layer.** PostgreSQL 12 has no common concept page for page layout or for the relation-file lifecycle. A separately requested page on either would let this page and its siblings link instead of repeating the explanation. None was created here.
@@ -951,6 +1002,10 @@ done
 - [rawpage.c#get_raw_page_internal](../../../../raw/postgres-12/contrib/pageinspect/rawpage.c#L95-L172)
 - [config.sgml#zero_damaged_pages](../../../../raw/postgres-12/doc/src/sgml/config.sgml#L9745-L9768)
 - [014_unlogged_reinit.pl#header](../../../../raw/postgres-12/src/test/recovery/t/014_unlogged_reinit.pl#L1-L27)
+- [pruneheap.c:78-140](../../../../raw/postgres-12/src/backend/access/heap/pruneheap.c#L78-L140)
+- [gist.c#gistbuildempty](../../../../raw/postgres-12/src/backend/access/gist/gist.c#L125-L142)
+- [gistutil.c#gistGetFakeLSN](../../../../raw/postgres-12/src/backend/access/gist/gistutil.c#L1027-L1048)
+- [hashutil.c:232-241](../../../../raw/postgres-12/src/backend/access/hash/hashutil.c#L232-L241)
 
 ## Navigation
 
