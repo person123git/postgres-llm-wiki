@@ -2573,3 +2573,17 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Bookkeeping: no index or `wiki/versions.md` change was needed, for the reason above. The page's `verified_by_agent` stays `not yet`, because Open Questions remain.
 - Isolation and teardown: every invocation's `stop` stage and exit trap ran the POSIX teardown checks. `clean` ran the checks and deleted `.wiki-runtime/tmp/blk0`, and the extracted script and the two run logs were deleted. A manual `ps -A -o pid= -o args=` listing, written to a file in the session scratchpad and searched with `grep -F`, found no process naming the data directory. The pinned checkout has no changed tracked files.
 - Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
+
+## [2026-11-05] third review and fix v12 | Scenarios that leave block zero of a schema's objects empty
+
+- Prompt hygiene: the request was "commit , review again". Correction: the stray space before the comma was dropped; the meaning is unchanged. The scope answer was "Fix in place".
+- Commit: the second round was committed locally as `8a32457`. `git fetch origin` and `git push origin master` failed with `Permission denied (publickey)`, so `master` is 3 commits ahead of `origin/master` and nothing was rebased.
+- Scope and rule conflicts: the review request gave no scope, so `MANDATORY Review Requests` applied: the report-only review ran first, then one scope question. No rule conflict. No subagent ran.
+- Review method: a one-off checker in the session scratchpad confirmed that all 159 unique raw citations on [the page](v12/questions/storage-and-vacuum/empty-block-zero-scenarios.md) resolve to existing files and line ranges. Each range whose label names a symbol either contains it or was read by hand. Every range was then spot-read against its claim.
+- Findings fixed: (T1) the autovacuum row of the measurement's non-default settings table said that only A8 depends on `autovacuum=off`. The `order_audit` and `order_refunds` A4 results depend on it too, because a default autovacuum between the `DELETE` and the explicit VACUUM would truncate either table to 0 blocks (vacuumlazy.c:1859-1863). The row now names the three dependent results and why the other end states are unaffected. (T2) the S0 claim on line 85 now cites the storage decision at heap.c:368-380 instead of the storage-creation code at 416-443.
+- Measurement: none run. The script text is unchanged (MD5 `af231574eefaac8b60d174253a4ac1fa`), so the last-run record stands, and neither fix changes a number.
+- Contradiction check: compared the whole page with the pin, the linked glossary entries, its entries in `wiki/index.md` and `wiki/v12/index.md`, and the v12 row in `wiki/versions.md`. Found 1 (T1), fixed 1, 0 reported without a change, 0 withdrawn.
+- Glossary: reviewed the entries the page links; no change needed.
+- Bookkeeping: no index or `wiki/versions.md` change was needed. `verified_by_agent` stays `not yet`.
+- Isolation and teardown: no service was started; nothing was running. The scratchpad checker was deleted.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry: 0 errors and 0 warnings.
