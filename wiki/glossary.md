@@ -91,6 +91,7 @@ verified_by_agent: not yet
   - [effective_cache_size](#effective_cache_size)
   - [effective_io_concurrency](#effective_io_concurrency)
   - [ElidedNode](#elidednode)
+  - [Empty page](#empty-page)
   - [Equivalence class](#equivalence-class)
   - [ereport](#ereport)
   - [EvalPlanQual](#evalplanqual)
@@ -192,6 +193,7 @@ verified_by_agent: not yet
   - [One-shot plan](#one-shot-plan)
   - [Operator class](#operator-class)
   - [Origin filter](#origin-filter)
+  - [Orphaned relation file](#orphaned-relation-file)
   - [OS page cache](#os-page-cache)
   - [Outer join](#outer-join)
   - [Page](#page)
@@ -226,6 +228,7 @@ verified_by_agent: not yet
   - [pg_operator](#pg_operator)
   - [pg_plan_advice](#pg_plan_advice)
   - [pg_proc](#pg_proc)
+  - [pg_resetwal](#pg_resetwal)
   - [pgs_mask](#pgs_mask)
   - [pg_stat_activity](#pg_stat_activity)
   - [pg_stat_all_tables](#pg_stat_all_tables)
@@ -273,6 +276,7 @@ verified_by_agent: not yet
   - [Regression test](#regression-test)
   - [REINDEX](#reindex)
   - [Relation](#relation)
+  - [Relation extension](#relation-extension)
   - [Relation mapper](#relation-mapper)
   - [Relation segment](#relation-segment)
   - [Relation size functions](#relation-size-functions)
@@ -383,6 +387,7 @@ verified_by_agent: not yet
   - [XLOG_PAGE_MAGIC](#xlog_page_magic)
   - [xmin and xmax](#xmin-and-xmax)
   - [xmin horizon](#xmin-horizon)
+  - [zero_damaged_pages](#zero_damaged_pages)
 - [Open Questions](#open-questions)
 - [Source References](#source-references)
 - [Navigation](#navigation)
@@ -422,6 +427,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - On 2026-10-30, the review fixes for the PostgreSQL 17 planner tutorial added [AlternativeSubPlan](#alternativesubplan), [Arbiter index](#arbiter-index), [DISTINCT ON](#distinct-on), [Hash aggregation](#hash-aggregation), [Join domain](#join-domain), [parallel_setup_cost and parallel_tuple_cost](#parallel_setup_cost-and-parallel_tuple_cost), [Plan cache](#plan-cache), [Pseudoconstant qual](#pseudoconstant-qual) and [TID scan and TID range scan](#tid-scan-and-tid-range-scan), checked on PostgreSQL 17 only. [EvalPlanQual](#evalplanqual) gained a PostgreSQL 17 note, [EXPLAIN](#explain) now rejects only the turned-on forms of `WAL`, `TIMING` and `SERIALIZE` without `ANALYZE`, and [Hash join](#hash-join) names the join-relation conditions of a partial hash join. Six headings were moved so that the list follows the sort rule above. There are 371 terms.
 
 - On 2026-11-02, the fourth review of the PostgreSQL 12 join methods question added [pg_operator](#pg_operator), checked on PostgreSQL 12 only. There are 372 terms.
+
+- On 2026-11-05, the PostgreSQL 12 block zero scenarios question added [Empty page](#empty-page), [Orphaned relation file](#orphaned-relation-file), [pg_resetwal](#pg_resetwal), [Relation extension](#relation-extension) and [zero_damaged_pages](#zero_damaged_pages), checked on PostgreSQL 12 only. There are 377 terms.
 
 ## Source Pins
 
@@ -1466,6 +1473,16 @@ Related: [io_combine_limit](#io_combine_limit), [Read stream](#read-stream), [Bi
 In PostgreSQL 19, an `ElidedNode` records a plan node that `set_plan_references()` removed from the finished plan: a trivial `SubqueryScan`, or an Append or MergeAppend that has a single child ([plannodes.h#ElidedNode](../raw/postgres-19/src/include/nodes/plannodes.h#L1857-L1876)). `record_elided_node()` stores the removed node's type, the range-table indexes it covered after the range-table offset is added, and, for an Append or MergeAppend, its `child_append_relid_sets`. The record is keyed by the `plan_node_id` of the surviving child, the only child of the removed node ([setrefs.c#record_elided_node](../raw/postgres-19/src/backend/optimizer/plan/setrefs.c#L3875-L3893), [setrefs.c#elided-subqueryscan](../raw/postgres-19/src/backend/optimizer/plan/setrefs.c#L1472-L1486), [setrefs.c#elided-append](../raw/postgres-19/src/backend/optimizer/plan/setrefs.c#L1908-L1926)). The list ends up in `PlannedStmt.elidedNodes` ([plannodes.h:156](../raw/postgres-19/src/include/nodes/plannodes.h#L156)). It exists for code that reconstructs planner decisions from the finished plan, because the removed node's relations no longer appear in the plan tree. [pg_plan_advice](#pg_plan_advice) is one such user: its plan walker collects the elided nodes of each plan node it visits ([setrefs.c#record_elided_node](../raw/postgres-19/src/backend/optimizer/plan/setrefs.c#L3875-L3879), [pgpa_walker.c#elided-nodes](../raw/postgres-19/contrib/pg_plan_advice/pgpa_walker.c#L283-L290)).
 
 Related: [PlannedStmt](#plannedstmt), [Append and MergeAppend](#append-and-mergeappend), [pg_plan_advice](#pg_plan_advice), [Range table](#range-table)
+
+### Empty page
+
+**Aliases:** `PageIsEmpty`, page with no line pointers. **Checked on:** PostgreSQL 12.
+
+An empty page is an initialized [page](#page) whose [line pointer](#line-pointer) array has no entries: `pd_lower` has not grown past the 24-byte page header. `PageIsEmpty()` tests exactly that ([bufpage.h#PageIsEmpty](../raw/postgres-12/src/include/storage/bufpage.h#L218-L223)). It differs from an [all-zero page](#all-zero-page), which was never initialized and has `pd_upper` equal to zero ([bufpage.h#PageIsNew](../raw/postgres-12/src/include/storage/bufpage.h#L225-L229)).
+
+It also differs from a heap page whose line pointers are all unused. In PostgreSQL 12, [VACUUM](#vacuum) marks dead line pointers unused and compacts the page, but it does not shorten the line pointer array, so such a page keeps its `pd_lower` and is not empty in this sense ([vacuumlazy.c#lazy_vacuum_page](../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L1604-L1619), [bufpage.c#PageRepairFragmentation](../raw/postgres-12/src/backend/storage/page/bufpage.c#L516-L569)). VACUUM treats both kinds of page as removable at the end of a table, because neither holds a tuple ([vacuumlazy.c#count_nondeletable_pages](../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L2092-L2125)). It marks an empty heap page all-visible and all-frozen, which it does not do for an all-zero page ([vacuumlazy.c#empty-page](../raw/postgres-12/src/backend/access/heap/vacuumlazy.c#L930-L960)).
+
+Related: [All-zero page](#all-zero-page), [Line pointer](#line-pointer), [Page](#page), [VACUUM](#vacuum), [Truncation](#truncation)
 
 ### Equivalence class
 
@@ -2785,6 +2802,16 @@ An origin filter lets a [subscription](#subscription) ask the publisher to skip 
 
 Related: [Replication origin](#replication-origin), [Subscription](#subscription), [Logical replication](#logical-replication), [Logical decoding](#logical-decoding)
 
+### Orphaned relation file
+
+**Aliases:** orphan file, orphaned relfilenode. **Checked on:** PostgreSQL 12.
+
+An orphaned relation file is a data file in a database directory that no live [catalog](#catalog) row maps to and that no pending deletion will remove. A new relation's file is created at once and queued for deletion if its transaction aborts ([storage.c#RelationCreateStorage](../raw/postgres-12/src/backend/catalog/storage.c#L70-L122)). An orderly abort deletes those files, and its WAL abort record lists them so that [crash recovery](#crash-recovery) and standbys delete them too ([storage.c#smgrDoPendingDeletes](../raw/postgres-12/src/backend/catalog/storage.c#L399-L446), [xact.c#abort-record-files](../raw/postgres-12/src/backend/access/transam/xact.c#L1650-L1652), [xact.c#xact_redo_abort](../raw/postgres-12/src/backend/access/transam/xact.c#L5925-L5926)). A server crash runs no abort and writes no abort record, so the files a transaction in progress had created stay behind, with whatever that transaction had written.
+
+An orphan differs from the zero-byte stub that dropped storage leaves: `mdunlinkfork()` truncates the first main-fork segment and registers it for removal after the next [checkpoint](#checkpoint), so a stub disappears on its own ([md.c#mdunlinkfork](../raw/postgres-12/src/backend/storage/smgr/md.c#L277-L323)).
+
+Related: [Relfilenumber](#relfilenumber), [Storage manager](#storage-manager), [Crash recovery](#crash-recovery), [Checkpoint](#checkpoint)
+
 ### OS page cache
 
 **Aliases:** kernel page cache, kernel disk cache, operating system cache, double buffering. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
@@ -3241,6 +3268,16 @@ Related: [pgs_mask](#pgs_mask), [Planner](#planner), [Hook](#hook), [Contrib](#c
 - PostgreSQL 19: Holds ([pg_proc.h#FormData_pg_proc](../raw/postgres-19/src/include/catalog/pg_proc.h#L48-L79), [pg_proc.h:123](../raw/postgres-19/src/include/catalog/pg_proc.h#L123), [pg_proc.h:147](../raw/postgres-19/src/include/catalog/pg_proc.h#L147)).
 
 Related: [Catalog](#catalog), [Syscache](#syscache), [fmgr](#fmgr), [pg_node_tree](#pg_node_tree), [Parallel query](#parallel-query)
+
+### pg_resetwal
+
+**Aliases:** `pg_resetwal`. **Checked on:** PostgreSQL 12.
+
+`pg_resetwal` is the server program that clears the [WAL](#wal) and optionally resets fields of the [control file](#control-file), so that a server that cannot start because those files are damaged can start again. Its documentation calls it a last resort and warns that the database may then contain inconsistent data from partially committed transactions; it recommends an immediate dump, `initdb` and reload ([pg_resetwal.sgml#description](../raw/postgres-12/doc/src/sgml/ref/pg_resetwal.sgml#L46-L60)).
+
+Changes that existed only in the discarded WAL are lost. One example is a heap page whose file still holds the zeros written when the relation was extended, because the page's content was in a shared buffer and in WAL only ([bufmgr.c#extend](../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L866-L879), [hio.c#single-page-extension](../raw/postgres-12/src/backend/access/heap/hio.c#L594-L609)).
+
+Related: [WAL](#wal), [Control file](#control-file), [Crash recovery](#crash-recovery), [All-zero page](#all-zero-page)
 
 ### pgs_mask
 
@@ -3835,6 +3872,16 @@ A relation is anything that has a row in the `pg_class` [catalog](#catalog): an 
 - PostgreSQL 19: Holds. The pinned checkout has the same ten `relkind` letters as 18; the property-graph kind that 19 briefly added was reverted with SQL/PGQ ([pg_class.h:171-180](../raw/postgres-19/src/include/catalog/pg_class.h#L171-L180)). Everything else holds ([relation.c:43-44](../raw/postgres-19/src/backend/access/common/relation.c#L43-L44), [pg_class.h:88-89](../raw/postgres-19/src/include/catalog/pg_class.h#L88-L89), [relcache.h:27](../raw/postgres-19/src/include/utils/relcache.h#L27), [rel.h:55](../raw/postgres-19/src/include/utils/rel.h#L55), [relation.c#relation_open](../raw/postgres-19/src/backend/access/common/relation.c#L34-L59), [rel.h:512-516](../raw/postgres-19/src/include/utils/rel.h#L512-L516)).
 
 Related: [pg_class](#pg_class), [Relcache](#relcache), [OID](#oid), [Relfilenumber](#relfilenumber), [Fork](#fork), [TOAST](#toast)
+
+### Relation extension
+
+**Aliases:** extending a relation, `P_NEW`, bulk extension, `RelationAddExtraBlocks`, relation extension lock. **Checked on:** PostgreSQL 12.
+
+Relation extension adds a block at the end of a relation [fork](#fork). A caller asks the [buffer manager](#buffer-manager) for block `P_NEW`. The buffer manager writes an all-zero page to the file with `smgrextend()` at once and returns a zeroed buffer ([bufmgr.c#extend](../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L866-L879)). The caller then initializes the page in that buffer only, so the file holds zeros until the buffer is written ([hio.c#single-page-extension](../raw/postgres-12/src/backend/access/heap/hio.c#L594-L609)).
+
+A heap insert takes the relation extension lock before extending. When it has to wait for that lock, it bulk-extends: it adds 20 pages per waiting backend, up to 512, records each in the [free space map](#free-space-map) and deliberately leaves them uninitialized until an insert picks one ([hio.c#contended-extension](../raw/postgres-12/src/backend/access/heap/hio.c#L555-L582), [hio.c#RelationAddExtraBlocks](../raw/postgres-12/src/backend/access/heap/hio.c#L186-L261), [hio.c#init-on-use](../raw/postgres-12/src/backend/access/heap/hio.c#L486-L500)). This is why an [all-zero page](#all-zero-page) inside a heap can be normal. Recovery also extends a file with zero pages when a WAL record names a block past its end ([xlogutils.c#XLogReadBufferExtended](../raw/postgres-12/src/backend/access/transam/xlogutils.c#L437-L520)).
+
+Related: [All-zero page](#all-zero-page), [Buffer manager](#buffer-manager), [Free space map](#free-space-map), [Heap](#heap), [Storage manager](#storage-manager)
 
 ### Relation mapper
 
@@ -5259,6 +5306,16 @@ The xmin horizon is the oldest transaction ID that some session or [replication 
 
 Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#vacuum), [Replication slot](#replication-slot), [Bloat](#bloat), [Two-phase commit](#two-phase-commit), [Hot standby](#hot-standby), [ProcArray](#procarray)
 
+### zero_damaged_pages
+
+**Aliases:** `zero_damaged_pages`. **Checked on:** PostgreSQL 12.
+
+`zero_damaged_pages` is a developer [GUC](#guc), off by default. Its context is `PGC_SUSET`, so only a superuser can change it, with `SET` in a session ([guc.c#zero_damaged_pages](../raw/postgres-12/src/backend/utils/misc/guc.c#L1150-L1161)). When it is on, a page whose header fails verification is replaced by zeros in its buffer with a WARNING instead of an ERROR, and a read past the end of a file returns zeros instead of failing ([bufmgr.c#verify-or-zero](../raw/postgres-12/src/backend/storage/buffer/bufmgr.c#L907-L924), [md.c#mdread-short-read](../raw/postgres-12/src/backend/storage/smgr/md.c#L606-L630)).
+
+The documentation warns that this destroys the rows on the damaged page and that zeroed pages are not forced to disk, so the file keeps the damaged bytes until something rewrites the page ([config.sgml#zero_damaged_pages](../raw/postgres-12/doc/src/sgml/config.sgml#L9745-L9768)). The setting does not repair anything; it only lets a scan get past the page.
+
+Related: [Data checksums](#data-checksums), [All-zero page](#all-zero-page), [GUC](#guc), [GUC context](#guc-context)
+
 ## Open Questions
 
 - [Predicate lock](#predicate-lock) and [Serializable snapshot isolation](#serializable-snapshot-isolation), added on 2026-10-22, were checked on PostgreSQL 12 only. Their applicability to the other recorded pins has not been checked.
@@ -5305,7 +5362,7 @@ Related: [Snapshot](#snapshot), [MVCC](#mvcc), [Pruning](#pruning), [VACUUM](#va
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (445 files):
+**PostgreSQL 12** (447 files):
 
 - [auto_explain.c:95-105](../raw/postgres-12/contrib/auto_explain/auto_explain.c#L95-L105)
 - [pg_buffercache_pages.c:164-167](../raw/postgres-12/contrib/pg_buffercache/pg_buffercache_pages.c#L164-L167)
@@ -5761,6 +5818,8 @@ One representative citation per cited source file, grouped by version:
 - [geqo_gene.h:35](../raw/postgres-12/src/include/optimizer/geqo_gene.h#L35)
 - [pg_config.h.in:853-864](../raw/postgres-12/src/include/pg_config.h.in#L853-L864)
 - [bufmgr.h:264-275](../raw/postgres-12/src/include/storage/bufmgr.h#L264-L275)
+- [xlogutils.c:437-520](../raw/postgres-12/src/backend/access/transam/xlogutils.c#L437-L520)
+- [pg_resetwal.sgml:46-60](../raw/postgres-12/doc/src/sgml/ref/pg_resetwal.sgml#L46-L60)
 
 **PostgreSQL 14** (355 files):
 
