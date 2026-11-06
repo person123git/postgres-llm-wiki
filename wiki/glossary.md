@@ -23,6 +23,7 @@ verified_by_agent: not yet
   - [Append and MergeAppend](#append-and-mergeappend)
   - [Apply worker](#apply-worker)
   - [Arbiter index](#arbiter-index)
+  - [Archive recovery](#archive-recovery)
   - [Asynchronous commit](#asynchronous-commit)
   - [Asynchronous I/O](#asynchronous-io)
   - [auto_explain](#auto_explain)
@@ -440,6 +441,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 
 - On 2026-11-06, the third review of the PostgreSQL 17 data corruption and data loss bug-fix list added [Minimum recovery point](#minimum-recovery-point) and [Replica identity](#replica-identity), checked on PostgreSQL 17 only. It also added PostgreSQL 17 notes to [Promotion](#promotion), which is now checked on 17 and 19, and to [Unlogged relation](#unlogged-relation) and [WAL archiving](#wal-archiving), which are now checked on 12 and 17, and a PostgreSQL 17 sentence and the CLOG alias to [SLRU](#slru). There are 381 terms.
 
+- On 2026-11-06, the fourth review of the PostgreSQL 17 data corruption and data loss bug-fix list added [Archive recovery](#archive-recovery), checked on PostgreSQL 17 only. There are 382 terms.
+
 ## Source Pins
 
 | Version | Checkout | Branch | Pinned commit |
@@ -604,6 +607,14 @@ An arbiter index is a unique index, or the index behind an exclusion constraint,
 Three cases matter when reading the source. `ON CONFLICT DO NOTHING` with neither a conflict target nor a constraint name infers no arbiter at all ([plancat.c:730-737](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L730-L737)); the executor then checks every unique or exclusion index that is ready for inserts, because an empty `arbiterIndexes` list selects them all; it skips an index not yet ready for inserts, and reaching a deferrable (not immediate) one raises an error ([execIndexing.c#ExecCheckIndexConstraints](../raw/postgres-17/src/backend/executor/execIndexing.c#L517-L518), [execIndexing.c:580-595](../raw/postgres-17/src/backend/executor/execIndexing.c#L580-L595)). A named target or constraint that matches no index is an error ([plancat.c:946-950](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L946-L950)). And `ON CONSTRAINT` naming an exclusion constraint is rejected for `DO UPDATE` ([plancat.c:835-840](../raw/postgres-17/src/backend/optimizer/util/plancat.c#L835-L840)).
 
 Related: [Speculative insertion](#speculative-insertion), [ModifyTable](#modifytable), [Invalid index](#invalid-index)
+
+### Archive recovery
+
+**Aliases:** standby mode, `recovery.signal`, `standby.signal`, `ArchiveRecoveryRequested`, `StandbyModeRequested`, `restore_command`. **Checked on:** PostgreSQL 17.
+
+In PostgreSQL 17, archive recovery is recovery that keeps replaying [WAL](#wal) from an archive or a primary, beyond what [crash recovery](#crash-recovery) finds in `pg_wal`. A signal file in the data directory requests it. `readRecoverySignalFile()` sets `StandbyModeRequested` and `ArchiveRecoveryRequested` for `standby.signal`, only `ArchiveRecoveryRequested` for `recovery.signal`, and returns with both false when neither file exists ([xlogrecovery.c:1066-1106](../raw/postgres-17/src/backend/access/transam/xlogrecovery.c#L1066-L1106), [xlog.h:302-303](../raw/postgres-17/src/include/access/xlog.h#L302-L303)). Without standby mode, `restore_command` is required; in standby mode, `primary_conninfo` can replace it ([xlogrecovery.c:1124-1142](../raw/postgres-17/src/backend/access/transam/xlogrecovery.c#L1124-L1142)). `restore_command` is empty by default and has context `sighup` ([guc_tables.c:3977-3984](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3977-L3984)). Only archive recovery maintains the [minimum recovery point](#minimum-recovery-point) ([pg_control.h:143-149](../raw/postgres-17/src/include/catalog/pg_control.h#L143-L149)). It ends by choosing a new [timeline](#timeline) ([xlog.c:5903-5907](../raw/postgres-17/src/backend/access/transam/xlog.c#L5903-L5907)).
+
+Related: [Crash recovery](#crash-recovery), [Hot standby](#hot-standby), [Minimum recovery point](#minimum-recovery-point), [Promotion](#promotion), [Timeline](#timeline), [WAL archiving](#wal-archiving)
 
 ### Asynchronous commit
 
