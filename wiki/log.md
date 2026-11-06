@@ -2692,3 +2692,16 @@ Append one entry after every scaffold change, version lifecycle event, ingest, t
 - Bookkeeping: index summaries unchanged, because they remain accurate; added a dated coverage note to `wiki/versions.md`; pins unchanged. `verified_by_agent` stays `not yet`.
 - Isolation and teardown: no service was started. Helper scripts lived under `.wiki-runtime/tmp/dlrev7/` and were deleted. No network was used.
 - Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry, reports 0 errors and 0 warnings.
+
+## [2026-11-06] sixth review and fix v17 | Data corruption and data loss bug fixes since PostgreSQL 12.2
+
+- Prompt hygiene: the request was "commit , review again"; corrections: removed the space before the comma and capitalized, giving "Commit, review again." The meaning is unchanged.
+- Commit: committed the fifth-review fixes as `dde8989` on `master`. `git fetch origin` failed with `Permission denied (publickey)`, so nothing was pushed; the branch is ahead of `origin/master`.
+- Scope: the review stated no scope, so it reported first and asked; the user chose "Fix in place". No rule conflict. No subagent ran.
+- Review checks: paired all 109 rows with their release-note text (`release-12.sgml` to `release-16.sgml` at their last tags, the pinned `release-17.sgml`) and read every pair; re-added the 12.22 (56) and 17.11 (55/1/53) tables; checked every internal and glossary anchor (0 failures).
+- Finding (1, fixed): the fifth review's 14.15 `pg_rewind` change claimed the bug needs WAL archiving and that the lost files "are those with a `.ready` archive status file". The 17.2 note and commit `cb844d66b` say "in particular", the fix (`parsexlog.c:223-238`) keeps every segment read while searching for the last common checkpoint, and the regression test (`010_keep_recycled_wals.pl:17`, `:31`) only shows the archiving case. The row now gives archiving as an example, the settings row keeps only the checksums or `wal_log_hints` gate (`pg_rewind.c:750-758`), and the archiving question is filed under Open Questions with its evidence. Context Reviewed names the commit and test.
+- Contradiction check: compared the whole page with itself, the pinned source, history and the `pg_rewind` test, the linked glossary entries, both index entries, the v17 coverage notes and the checksum page. Found 1 contradiction (the finding above: a page statement claimed more than the source supports), fixed by stating neither side as fact and filing it under Open Questions; 0 withdrawn; 0 in other documents. The fifth-review log entry and coverage note are dated records and were left as written.
+- Glossary: reviewed WAL archiving, Data checksums and Back-patch; accurate, no change needed. Common concept pages: none touched.
+- Bookkeeping: index summaries unchanged, because they remain accurate; added a dated coverage note to `wiki/versions.md`; pins unchanged. `verified_by_agent` stays `not yet`.
+- Isolation and teardown: no service was started. Helper scripts lived under `.wiki-runtime/tmp/dlrev8/` and were deleted. The only network use was the failed `git fetch origin`.
+- Validation: `.wiki-runtime/venv/bin/python scripts/wiki_lint`, run after this entry, reports 0 errors and 0 warnings.
