@@ -181,6 +181,7 @@ verified_by_agent: not yet
   - [Memory context](#memory-context)
   - [Merge join](#merge-join)
   - [Metapage](#metapage)
+  - [Minimum recovery point](#minimum-recovery-point)
   - [Missed dead tuple](#missed-dead-tuple)
   - [ModifyTable](#modifytable)
   - [Most common values and histogram](#most-common-values-and-histogram)
@@ -289,6 +290,7 @@ verified_by_agent: not yet
   - [reltuples and relpages](#reltuples-and-relpages)
   - [Reorder buffer](#reorder-buffer)
   - [REPACK](#repack)
+  - [Replica identity](#replica-identity)
   - [Replication origin](#replication-origin)
   - [Replication slot](#replication-slot)
   - [Resource manager](#resource-manager)
@@ -435,6 +437,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - On 2026-11-06, the review of the PostgreSQL 17 data checksum bug-fix list added [Incremental backup](#incremental-backup), checked on PostgreSQL 17 only. It also added PostgreSQL 17 notes to [Control file](#control-file), which is now checked on 12, 17 and 19, and to [Torn page](#torn-page), which is now checked on 12 and 17. There are 378 terms.
 
 - On 2026-11-06, the PostgreSQL 17 data corruption and data loss bug-fix list added [In-place update](#in-place-update), checked on PostgreSQL 17 only. There are 379 terms.
+
+- On 2026-11-06, the third review of the PostgreSQL 17 data corruption and data loss bug-fix list added [Minimum recovery point](#minimum-recovery-point) and [Replica identity](#replica-identity), checked on PostgreSQL 17 only. It also added PostgreSQL 17 notes to [Promotion](#promotion), which is now checked on 17 and 19, and to [Unlogged relation](#unlogged-relation) and [WAL archiving](#wal-archiving), which are now checked on 12 and 17, and a PostgreSQL 17 sentence and the CLOG alias to [SLRU](#slru). There are 381 terms.
 
 ## Source Pins
 
@@ -2655,6 +2659,14 @@ A metapage is a special page, at block 0 of an index, that holds bookkeeping for
 
 Related: [Fast root](#fast-root), [allequalimage](#allequalimage), [Pending list](#pending-list), [B-tree](#b-tree)
 
+### Minimum recovery point
+
+**Aliases:** `minRecoveryPoint`, `minRecoveryPointTLI`, `UpdateMinRecoveryPoint()`, consistent recovery state. **Checked on:** PostgreSQL 17.
+
+In PostgreSQL 17, the minimum recovery point is a [WAL](#wal) position stored in the [control file](#control-file). Recovery must replay at least that far before the database counts as consistent. During archive recovery, each flush of a data change advances it to the latest replayed [LSN](#lsn). So a recovery that is aborted and restarted cannot stop at an earlier location than data already on disk ([pg_control.h:139-169](../raw/postgres-17/src/include/catalog/pg_control.h#L139-L169)). While WAL cannot be inserted, `XLogFlush()` advances the minimum recovery point instead of flushing WAL ([xlog.c:2784-2795](../raw/postgres-17/src/backend/access/transam/xlog.c#L2784-L2795)), through `UpdateMinRecoveryPoint()` ([xlog.c#UpdateMinRecoveryPoint](../raw/postgres-17/src/backend/access/transam/xlog.c#L2688-L2698)). `CheckRecoveryConsistency()` declares consistency, and logs `consistent recovery state reached`, only once replay has passed this point and no backup end is still required ([xlogrecovery.c:2238-2258](../raw/postgres-17/src/backend/access/transam/xlogrecovery.c#L2238-L2258)).
+
+Related: [Control file](#control-file), [Crash recovery](#crash-recovery), [Hot standby](#hot-standby), [LSN](#lsn), [WAL](#wal)
+
 ### Missed dead tuple
 
 **Aliases:** missed dead tuples, `missed_dead_tuples`, `missed_dead_pages`, cleanup lock contention, "tuples missed". **Checked on:** PostgreSQL 17.
@@ -3733,9 +3745,12 @@ Related: [PathTarget](#pathtarget), [Plan tree](#plan-tree), [Upper relation](#u
 
 ### Promotion
 
-**Aliases:** standby promotion, failover, `pg_promote()`, `pg_ctl promote`, promote signal file, `PromoteIsTriggered()`. **Checked on:** PostgreSQL 19.
+**Aliases:** standby promotion, failover, `pg_promote()`, `pg_ctl promote`, promote signal file, `PromoteIsTriggered()`. **Checked on:** PostgreSQL 17, 19.
 
 In PostgreSQL 19, promotion turns a standby into a primary: the server leaves standby mode and switches to normal read-write operation. The docs name it as the way to trigger failover ([high-availability.sgml:654-660](../raw/postgres-19/doc/src/sgml/high-availability.sgml#L654-L660), [high-availability.sgml:1567-1573](../raw/postgres-19/doc/src/sgml/high-availability.sgml#L1567-L1573)). Both `pg_ctl promote` and `pg_promote()` create a file named `promote` in the data directory and send `SIGUSR1` to the [postmaster](#postmaster) ([xlog.h:340](../raw/postgres-19/src/include/access/xlog.h#L340), [pg_ctl.c#do_promote](../raw/postgres-19/src/bin/pg_ctl/pg_ctl.c#L1186-L1241), [xlogfuncs.c#pg_promote](../raw/postgres-19/src/backend/access/transam/xlogfuncs.c#L682-L743)). `pg_ctl` refuses when the [control file](#control-file) does not show archive recovery, and `pg_promote()` by default waits up to 60 seconds for recovery to end ([pg_ctl.c:1209-1215](../raw/postgres-19/src/bin/pg_ctl/pg_ctl.c#L1209-L1215), [pg_proc.dat:6788-6792](../raw/postgres-19/src/include/catalog/pg_proc.dat#L6788-L6792)). The postmaster passes the request to the startup process as `SIGUSR2` ([postmaster.c:3941-3953](../raw/postgres-19/src/backend/postmaster/postmaster.c#L3941-L3953), [startup.c#StartupProcTriggerHandler](../raw/postgres-19/src/backend/postmaster/startup.c#L91-L97)). The startup process sees it in `CheckForStandbyTrigger()`, logs "received promote request", removes the file and sets a shared flag that any process can read through `PromoteIsTriggered()` ([xlogrecovery.c#CheckForStandbyTrigger](../raw/postgres-19/src/backend/access/transam/xlogrecovery.c#L4449-L4468), [xlogrecovery.c#PromoteIsTriggered](../raw/postgres-19/src/backend/access/transam/xlogrecovery.c#L4407-L4429)). A standby runs archive recovery, and at the end of archive recovery `StartupXLOG()` always picks a new timeline ID, so WAL written after promotion is on a new [timeline](#timeline) ([xlogrecovery.c#readRecoverySignalFile](../raw/postgres-19/src/backend/access/transam/xlogrecovery.c#L1047-L1062), [xlog.c:6050-6067](../raw/postgres-19/src/backend/access/transam/xlog.c#L6050-L6067)).
+
+**Version notes:**
+- PostgreSQL 17: Holds. `pg_ctl promote` refuses unless the control file shows archive recovery, then creates the `promote` file and sends `SIGUSR1` to the postmaster ([pg_ctl.c#do_promote](../raw/postgres-17/src/bin/pg_ctl/pg_ctl.c#L1174-L1228)). `pg_promote()` does the same from SQL and by default waits up to 60 seconds ([xlogfuncs.c#pg_promote](../raw/postgres-17/src/backend/access/transam/xlogfuncs.c#L669-L749), [system_functions.sql:398-400](../raw/postgres-17/src/backend/catalog/system_functions.sql#L398-L400)). The postmaster passes the request to the startup process as `SIGUSR2` ([postmaster.c:3825-3836](../raw/postgres-17/src/backend/postmaster/postmaster.c#L3825-L3836), [startup.c#StartupProcTriggerHandler](../raw/postgres-17/src/backend/postmaster/startup.c#L93-L97)). `CheckForStandbyTrigger()` logs "received promote request", removes the file and sets the shared flag that `PromoteIsTriggered()` reads ([xlogrecovery.c#CheckForStandbyTrigger](../raw/postgres-17/src/backend/access/transam/xlogrecovery.c#L4455-L4471), [xlogrecovery.c#PromoteIsTriggered](../raw/postgres-17/src/backend/access/transam/xlogrecovery.c#L4416-L4429)). The end of archive recovery picks a new timeline ID ([xlog.c:5903-5907](../raw/postgres-17/src/backend/access/transam/xlog.c#L5903-L5907)). The docs name `pg_ctl promote` and `pg_promote()` as the way to trigger failover ([high-availability.sgml:1500-1501](../raw/postgres-17/doc/src/sgml/high-availability.sgml#L1500-L1501)).
 
 Related: [Hot standby](#hot-standby), [Timeline](#timeline), [Crash recovery](#crash-recovery), [Postmaster](#postmaster), [WAL receiver](#wal-receiver), [Control file](#control-file)
 
@@ -4040,6 +4055,14 @@ In PostgreSQL 19, `REPACK` is a new command, with a new unreserved keyword, that
 - PostgreSQL 18: Not present in PostgreSQL 18 ([kwlist.h:376-377](../raw/postgres-18/src/include/parser/kwlist.h#L376-L377), [cluster.c:311](../raw/postgres-18/src/backend/commands/cluster.c#L311)).
 
 Related: [CLUSTER](#cluster), [VACUUM FULL](#vacuum-full), [Table rewrite](#table-rewrite), [Logical decoding](#logical-decoding), [Reorder buffer](#reorder-buffer), [Progress reporting](#progress-reporting)
+
+### Replica identity
+
+**Aliases:** `REPLICA IDENTITY`, `relreplident`, `REPLICA_IDENTITY_DEFAULT`, `REPLICA_IDENTITY_NOTHING`, `REPLICA_IDENTITY_FULL`, `REPLICA_IDENTITY_INDEX`, `ExtractReplicaIdentity()`. **Checked on:** PostgreSQL 17.
+
+In PostgreSQL 17, a table's replica identity chooses which old-row columns an `UPDATE` or `DELETE` writes to [WAL](#wal), so that [logical decoding](#logical-decoding) and a subscriber can find the row to change. `pg_class.relreplident` holds one of four settings: `d` (the default: the primary key, or nothing without one), `n` (nothing), `f` (all columns) or `i` (an explicitly chosen index) ([pg_class.h:179-190](../raw/postgres-17/src/include/catalog/pg_class.h#L179-L190)). New tables, materialized views and partitioned tables outside the system catalogs start with `d`; other relations get `n` ([relcache.c:3695-3702](../raw/postgres-17/src/backend/utils/cache/relcache.c#L3695-L3702)). `ALTER TABLE ... REPLICA IDENTITY` changes it ([gram.y:2917-2918](../raw/postgres-17/src/backend/parser/gram.y#L2917-L2918)). For a logically logged table, `ExtractReplicaIdentity()` builds the old-row tuple from the configured identity, and returns nothing for `n` ([heapam.c#ExtractReplicaIdentity](../raw/postgres-17/src/backend/access/heap/heapam.c#L9530-L9560)). `CheckCmdReplicaIdentity()` rejects an `UPDATE` or `DELETE` on a table whose [publication](#publication) publishes that action when the table has neither a replica identity index nor `FULL` identity ([execReplication.c#CheckCmdReplicaIdentity](../raw/postgres-17/src/backend/executor/execReplication.c#L656-L734)).
+
+Related: [Logical decoding](#logical-decoding), [Publication](#publication), [Apply worker](#apply-worker), [Catalog](#catalog)
 
 ### Replication origin
 
@@ -4413,9 +4436,9 @@ Related: [Bottom-up index deletion](#bottom-up-index-deletion), [Line pointer](#
 
 ### SLRU
 
-**Aliases:** simple LRU, SLRU buffers, `slru.c`, `pg_xact`, `pg_subtrans`, `pg_stat_slru`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
+**Aliases:** simple LRU, SLRU buffers, `slru.c`, CLOG (commit log), `clog.c`, `pg_xact`, `pg_subtrans`, `pg_stat_slru`. **Checked on:** PostgreSQL 12, 14, 17, 18, 19.
 
-An SLRU (simple least-recently-used buffer pool) is a small, dedicated page cache for metadata files that wrap around. PostgreSQL uses SLRUs for transaction status indexed by [transaction ID](#transaction-id) (commit status, subtransaction parents, commit timestamps), for [MultiXact](#multixact) data, for serializable-isolation locks and for `NOTIFY` traffic, and extensions can define their own ([slru.c:3-10](../raw/postgres-17/src/backend/access/transam/slru.c#L3-L10)). Each SLRU is a pool of shared page buffers separate from [shared_buffers](#shared_buffers), managed by plain least-recently-used replacement that never evicts the latest page ([slru.c:17-23](../raw/postgres-17/src/backend/access/transam/slru.c#L17-L23)). In PostgreSQL 17 each SLRU's buffers are split into banks, and each bank has its own control [LWLock](#lwlock) ([slru.c:17-31](../raw/postgres-17/src/backend/access/transam/slru.c#L17-L31)). Buffer counts are GUCs such as `multixact_offset_buffers`, `multixact_member_buffers` and `transaction_buffers`. These have context `postmaster`, so changing them needs a restart ([guc_tables.c#multixact_member_buffers](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2316-L2336), [guc_tables.c#transaction_buffers](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2371-L2380)). The `pg_stat_slru` view reports, per SLRU, blocks zeroed, hit, read and written, plus flushes and truncations ([system_views.sql#pg_stat_slru](../raw/postgres-17/src/backend/catalog/system_views.sql#L919-L930)).
+An SLRU (simple least-recently-used buffer pool) is a small, dedicated page cache for metadata files that wrap around. PostgreSQL uses SLRUs for transaction status indexed by [transaction ID](#transaction-id) (commit status, subtransaction parents, commit timestamps), for [MultiXact](#multixact) data, for serializable-isolation locks and for `NOTIFY` traffic, and extensions can define their own ([slru.c:3-10](../raw/postgres-17/src/backend/access/transam/slru.c#L3-L10)). In PostgreSQL 17, the commit-status SLRU is the CLOG (commit log): `clog.c` keeps two status bits per transaction on top of `slru.c`, in the `pg_xact` directory ([clog.c:3-12](../raw/postgres-17/src/backend/access/transam/clog.c#L3-L12), [clog.c:811-813](../raw/postgres-17/src/backend/access/transam/clog.c#L811-L813)). Each SLRU is a pool of shared page buffers separate from [shared_buffers](#shared_buffers), managed by plain least-recently-used replacement that never evicts the latest page ([slru.c:17-23](../raw/postgres-17/src/backend/access/transam/slru.c#L17-L23)). In PostgreSQL 17 each SLRU's buffers are split into banks, and each bank has its own control [LWLock](#lwlock) ([slru.c:17-31](../raw/postgres-17/src/backend/access/transam/slru.c#L17-L31)). Buffer counts are GUCs such as `multixact_offset_buffers`, `multixact_member_buffers` and `transaction_buffers`. These have context `postmaster`, so changing them needs a restart ([guc_tables.c#multixact_member_buffers](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2316-L2336), [guc_tables.c#transaction_buffers](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2371-L2380)). The `pg_stat_slru` view reports, per SLRU, blocks zeroed, hit, read and written, plus flushes and truncations ([system_views.sql#pg_stat_slru](../raw/postgres-17/src/backend/catalog/system_views.sql#L919-L930)).
 
 **Version notes:**
 - PostgreSQL 12: Differs: each SLRU has one control lock and no banks, and the MultiXact buffer counts are compiled-in constants of 8 and 16 pages, not GUCs ([slru.c:3-22](../raw/postgres-12/src/backend/access/transam/slru.c#L3-L22), [multixact.h:32-33](../raw/postgres-12/src/include/access/multixact.h#L32-L33), [multixact.c:1829-1835](../raw/postgres-12/src/backend/access/transam/multixact.c#L1829-L1835)). 12 keeps no SLRU statistics: the stats collector's message types include no SLRU message, so there is no `pg_stat_slru` view ([pgstat.h#StatMsgType](../raw/postgres-12/src/include/pgstat.h#L48-L69)).
@@ -4998,7 +5021,7 @@ Related: [Transaction ID](#transaction-id), [xmin horizon](#xmin-horizon), [Subs
 
 ### Unlogged relation
 
-**Aliases:** unlogged table, `UNLOGGED`, `RELPERSISTENCE_UNLOGGED`, init fork. **Checked on:** PostgreSQL 12.
+**Aliases:** unlogged table, `UNLOGGED`, `RELPERSISTENCE_UNLOGGED`, init fork. **Checked on:** PostgreSQL 12, 17.
 
 In PostgreSQL 12, an unlogged relation keeps its ordinary data outside the normal relation-data [WAL](#wal) path. Ordinary table creation defaults to permanent storage (`p`); explicit `UNLOGGED` selects `u`, for which `RelationNeedsWAL()` is false. Its initialization [fork](#fork) is an exception: heap init-file creation and the B-tree init metapage are WAL-logged. [gram.y#persistence-default](../raw/postgres-12/src/backend/parser/gram.y#L3282-L3283) [pg_class.h#persistence](../raw/postgres-12/src/include/catalog/pg_class.h#L165-L167) [rel.h#RelationNeedsWAL](../raw/postgres-12/src/include/utils/rel.h#L515-L520) [heapam_handler.c#init-creation](../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L605-L624) [nbtree.c#init-metapage-WAL](../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L153-L183)
 
@@ -5008,6 +5031,9 @@ In PostgreSQL 12, an unlogged relation keeps its ordinary data outside the norma
 | Ordinary clean restart without requested recovery or required redo | Does not enter that recovery/reset branch. [xlog.c#recovery-gate](../raw/postgres-12/src/backend/access/transam/xlog.c#L6728-L6749) |
 
 The selector is physical init-file identity, not a schema. An empty heap init fork and an initialized B-tree init fork also differ: the latter contains a metapage, so “reset to empty” does not mean every file is zero bytes. [reinit.c#selection](../raw/postgres-12/src/backend/storage/file/reinit.c#L180-L258) [heapam_handler.c#heap-init](../raw/postgres-12/src/backend/access/heap/heapam_handler.c#L605-L624) [nbtree.c#btbuildempty](../raw/postgres-12/src/backend/access/nbtree/nbtree.c#L153-L183)
+
+**Version notes:**
+- PostgreSQL 17: Holds, except that the B-tree init metapage is written through the [bulk writer](#bulk-writer), which WAL-logs an init fork even when `RelationNeedsWAL()` is false ([nbtree.c#btbuildempty](../raw/postgres-17/src/backend/access/nbtree/nbtree.c#L155-L173), [bulk_write.c:88-93](../raw/postgres-17/src/backend/storage/smgr/bulk_write.c#L88-L93)). The grammar still defaults to permanent storage and `UNLOGGED` selects `u` ([gram.y:3723-3724](../raw/postgres-17/src/backend/parser/gram.y#L3723-L3724), [pg_class.h:175-177](../raw/postgres-17/src/include/catalog/pg_class.h#L175-L177)), `RelationNeedsWAL()` is false for it ([rel.h:628-631](../raw/postgres-17/src/include/utils/rel.h#L628-L631)), and heap init-fork creation is WAL-logged even at `wal_level = minimal` ([heapam_handler.c:608-621](../raw/postgres-17/src/backend/access/heap/heapam_handler.c#L608-L621)). Startup still removes non-init files before replay and copies init forks to main after it ([xlog.c:5718-5724](../raw/postgres-17/src/backend/access/transam/xlog.c#L5718-L5724), [xlog.c:5866-5873](../raw/postgres-17/src/backend/access/transam/xlog.c#L5866-L5873)).
 
 Related: [Crash recovery](#crash-recovery), [Fork](#fork), [Metapage](#metapage), [Schema](#schema), [WAL](#wal)
 
@@ -5174,7 +5200,7 @@ Related: [LSN](#lsn), [Checkpoint](#checkpoint), [Full-page image](#full-page-im
 
 ### WAL archiving
 
-**Aliases:** continuous archiving, `archive_mode`, `archive_command`, `archive_timeout`, archiver process, `pgarch.c`, `.ready` and `.done` status files, `pg_stat_archiver`. **Checked on:** PostgreSQL 12.
+**Aliases:** continuous archiving, `archive_mode`, `archive_command`, `archive_timeout`, archiver process, `pgarch.c`, `.ready` and `.done` status files, `pg_stat_archiver`, `archive_library`. **Checked on:** PostgreSQL 12, 17.
 
 In PostgreSQL 12, WAL archiving saves a copy of each completed [WAL](#wal) segment file outside the cluster. A file-system backup, such as a [base backup](#base-backup), can then be restored and rolled forward by replaying the archived segments ([backup.sgml#continuous-archiving](../raw/postgres-12/doc/src/sgml/backup.sgml#L473-L487), [backup.sgml#backup-archiving-wal](../raw/postgres-12/doc/src/sgml/backup.sgml#L560-L591)). `archive_mode` turns it on and needs a restart. `archive_command` is the shell command that copies one segment, and it takes effect on reload ([config.sgml#archive-mode-command](../raw/postgres-12/doc/src/sgml/config.sgml#L3072-L3133), [guc.c#archive_mode](../raw/postgres-12/src/backend/utils/misc/guc.c#L4363-L4371), [guc.c#archive_command](../raw/postgres-12/src/backend/utils/misc/guc.c#L3454-L3462)).
 
@@ -5185,6 +5211,9 @@ The hand-off works through status files:
 3. A failure is counted, then retried after one second. After three consecutive failures the archiver logs `failed too many times, will try again later` and stops until a later cycle ([pgarch.c:527-545](../raw/postgres-12/src/backend/postmaster/pgarch.c#L527-L545)).
 
 Because zero is the only success test, the command must return zero only after the file is safely stored ([config.sgml#archive-command-success](../raw/postgres-12/doc/src/sgml/config.sgml#L3110-L3133)). While archiving is active, a checkpoint removes or recycles a segment only once its `.done` file exists, so a failing command makes `pg_wal` grow ([xlogarchive.c#XLogArchiveCheckDone](../raw/postgres-12/src/backend/access/transam/xlogarchive.c#L601-L632), [xlog.c#RemoveOldXlogFiles](../raw/postgres-12/src/backend/access/transam/xlog.c#L3979-L3988)). `archive_timeout`, off by default, forces a switch to a new segment after the given time, so that a quiet server still archives recent changes ([config.sgml#archive_timeout](../raw/postgres-12/doc/src/sgml/config.sgml#L3138-L3168), [guc.c#archive_timeout](../raw/postgres-12/src/backend/utils/misc/guc.c#L1964-L1974)). The `pg_stat_archiver` view reports the success and failure counts ([monitoring.sgml#pg-stat-archiver-view](../raw/postgres-12/doc/src/sgml/monitoring.sgml#L2342-L2398)).
+
+**Version notes:**
+- PostgreSQL 17: Holds, except that the copy step can come from an archive module. `archive_library`, empty by default, names a library whose callbacks replace `archive_command`, and setting both is an error ([guc_tables.c:3957-3975](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3957-L3975), [pgarch.c#LoadArchiveLibrary](../raw/postgres-17/src/backend/postmaster/pgarch.c#L911-L935)). Both are `sighup`, so they take effect on reload; `archive_mode` is still `postmaster` with boot value `off` ([guc_tables.c:4936-4943](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L4936-L4943)). `XLogWrite()` still calls `XLogArchiveNotifySeg()` when archiving is active ([xlog.c:2490-2491](../raw/postgres-17/src/backend/access/transam/xlog.c#L2490-L2491)). The archiver marks a success with `pgarch_archiveDone()`, reports each success and failure to the cumulative statistics, and after three failures, one second apart, stops until a later cycle ([pgarch.c:70](../raw/postgres-17/src/backend/postmaster/pgarch.c#L70), [pgarch.c:476-506](../raw/postgres-17/src/backend/postmaster/pgarch.c#L476-L506)). Segment removal still waits for `XLogArchiveCheckDone()` ([xlog.c:3884-3886](../raw/postgres-17/src/backend/access/transam/xlog.c#L3884-L3886)), and `archive_timeout` still defaults to 0 with context `sighup` ([guc_tables.c:2049-2056](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L2049-L2056)).
 
 Related: [WAL](#wal), [Base backup](#base-backup), [Checkpoint](#checkpoint), [Replication slot](#replication-slot), [Timeline](#timeline)
 
