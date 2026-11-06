@@ -137,6 +137,7 @@ verified_by_agent: not yet
   - [HOT-blocking column](#hot-blocking-column)
   - [Huge pages](#huge-pages)
   - [Hypothetical index](#hypothetical-index)
+  - [Incremental backup](#incremental-backup)
   - [Incremental sort](#incremental-sort)
   - [indcheckxmin](#indcheckxmin)
   - [Index page recycling](#index-page-recycling)
@@ -429,6 +430,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - On 2026-11-02, the fourth review of the PostgreSQL 12 join methods question added [pg_operator](#pg_operator), checked on PostgreSQL 12 only. There are 372 terms.
 
 - On 2026-11-05, the PostgreSQL 12 block zero scenarios question added [Empty page](#empty-page), [Orphaned relation file](#orphaned-relation-file), [pg_resetwal](#pg_resetwal), [Relation extension](#relation-extension) and [zero_damaged_pages](#zero_damaged_pages), checked on PostgreSQL 12 only. There are 377 terms.
+
+- On 2026-11-06, the review of the PostgreSQL 17 data checksum bug-fix list added [Incremental backup](#incremental-backup), checked on PostgreSQL 17 only. It also added PostgreSQL 17 notes to [Control file](#control-file), which is now checked on 12, 17 and 19, and to [Torn page](#torn-page), which is now checked on 12 and 17. There are 378 terms.
 
 ## Source Pins
 
@@ -1144,12 +1147,13 @@ Related: [Extension](#extension), [pageinspect](#pageinspect), [pgstattuple](#pg
 
 ### Control file
 
-**Aliases:** `pg_control`, `global/pg_control`, `XLOG_CONTROL_FILE`, `ControlFileData`, `PG_CONTROL_VERSION`, `pg_controldata`. **Checked on:** PostgreSQL 12, 19.
+**Aliases:** `pg_control`, `global/pg_control`, `XLOG_CONTROL_FILE`, `ControlFileData`, `PG_CONTROL_VERSION`, `pg_controldata`. **Checked on:** PostgreSQL 12, 17, 19.
 
 In PostgreSQL 19, the control file is the small binary file `global/pg_control`, relative to the data directory, that records cluster-wide state such as format versions and the last checkpoint ([xlog_internal.h:146-149](../raw/postgres-19/src/include/access/xlog_internal.h#L146-L149)). Its layout is `ControlFileData`: the system identifier, the `pg_control_version` and `catalog_version_no` format stamps, the cluster state, the latest [checkpoint](#checkpoint) location with a copy of that checkpoint record, `minRecoveryPoint` and the backup fields, the WAL-related settings, build parameters such as block size and alignment, and a CRC that must come last ([pg_control.h#ControlFileData](../raw/postgres-19/src/include/catalog/pg_control.h#L105-L136), [pg_control.h:169-209](../raw/postgres-19/src/include/catalog/pg_control.h#L169-L209), [pg_control.h:246-248](../raw/postgres-19/src/include/catalog/pg_control.h#L246-L248)). The used part must stay within 512 bytes so that each update is an atomic write, and the file on disk is padded to 8192 bytes ([pg_control.h:250-265](../raw/postgres-19/src/include/catalog/pg_control.h#L250-L265)). `PG_CONTROL_VERSION` is 1905 at the pin, and `ReadControlFile()` stops startup when the stored format version, the CRC or the [catalog version](#catalog-version) does not match the binary ([pg_control.h:24-25](../raw/postgres-19/src/include/catalog/pg_control.h#L24-L25), [xlog.c#ReadControlFile](../raw/postgres-19/src/backend/access/transam/xlog.c#L4446-L4498)). `BootStrapXLOG()` creates the file with `WriteControlFile()`, and `UpdateControlFile()` rewrites and flushes it through the shared `update_controlfile()` routine ([xlog.c:5287-5288](../raw/postgres-19/src/backend/access/transam/xlog.c#L5287-L5288), [xlog.c#UpdateControlFile](../raw/postgres-19/src/backend/access/transam/xlog.c#L4636-L4644), [controldata_utils.c#update_controlfile](../raw/postgres-19/src/common/controldata_utils.c#L180-L200)). Two fields hold the [data checksums](#data-checksums) state: `data_checksum_version` is the current state, and `data_checksum_version_init` keeps the state from cluster initialization, which `pg_control_init()` returns as `data_page_checksum_version` ([pg_control.h:224-231](../raw/postgres-19/src/include/catalog/pg_control.h#L224-L231), [pg_controldata.c#pg_control_init](../raw/postgres-19/src/backend/utils/misc/pg_controldata.c#L206-L258)). The `pg_controldata` program prints the file, and the SQL functions `pg_control_system()`, `pg_control_checkpoint()`, `pg_control_recovery()` and `pg_control_init()` return most of the same fields ([pg_controldata.sgml#r1-app-pgcontroldata-1](../raw/postgres-19/doc/src/sgml/ref/pg_controldata.sgml#L36-L44), [func-info.sgml#functions-info-controldata](../raw/postgres-19/doc/src/sgml/func/func-info.sgml#L3302-L3313), [pg_controldata.c:32](../raw/postgres-19/src/backend/utils/misc/pg_controldata.c#L32), [pg_controldata.c:70](../raw/postgres-19/src/backend/utils/misc/pg_controldata.c#L70), [pg_controldata.c:166](../raw/postgres-19/src/backend/utils/misc/pg_controldata.c#L166)). An extension's `.control` file is a different thing; see [Extension](#extension).
 
 **Version notes:**
 - PostgreSQL 12: Differs in layout; this note verifies the cluster-state and validation meanings needed by the corruption-log reference. `global/pg_control` contains `ControlFileData`, including its format versions, cluster state, checkpoint location/copy, `data_checksum_version`, and a final checksum field. The data-page checksum gate tests `data_checksum_version > 0`, while startup validates the control file's own checksum independently ([xlog_internal.h:144](../raw/postgres-12/src/include/access/xlog_internal.h#L144), [pg_control.h#ControlFileData](../raw/postgres-12/src/include/catalog/pg_control.h#L100-L131), [pg_control.h#checksum-fields](../raw/postgres-12/src/include/catalog/pg_control.h#L221-L233), [xlog.c#DataChecksumsEnabled](../raw/postgres-12/src/backend/access/transam/xlog.c#L4818-L4826), [xlog.c#control-file-checksum](../raw/postgres-12/src/backend/access/transam/xlog.c#L4638-L4647)). The PostgreSQL 19 layout constants and additional initialization-state field above are scoped to 19.
+- PostgreSQL 17: Differs in the checksum-state fields and the format number. The file is still `global/pg_control`, the `ControlFileData` CRC must still come last, the used part must stay within 512 bytes, and the file is padded to 8192 bytes ([xlog_internal.h:150](../raw/postgres-17/src/include/access/xlog_internal.h#L150), [pg_control.h:231-233](../raw/postgres-17/src/include/catalog/pg_control.h#L231-L233), [pg_control.h:236-241](../raw/postgres-17/src/include/catalog/pg_control.h#L236-L241), [pg_control.h:243-250](../raw/postgres-17/src/include/catalog/pg_control.h#L243-L250)). `PG_CONTROL_VERSION` is 1700 ([pg_control.h:25](../raw/postgres-17/src/include/catalog/pg_control.h#L25)). The data-page checksum state is the single field `data_checksum_version`, which is zero when checksums are off; there is no `data_checksum_version_init` field ([pg_control.h:221-222](../raw/postgres-17/src/include/catalog/pg_control.h#L221-L222)). `ReadControlFile()` computes the CRC over everything before the `crc` field and stops startup with "incorrect checksum in control file" when it does not match ([xlog.c#ReadControlFile](../raw/postgres-17/src/backend/access/transam/xlog.c#L4360-L4370)). That CRC protects only the control file; it is unrelated to [data checksums](#data-checksums) on data pages.
 
 Related: [Catalog version](#catalog-version), [Checkpoint](#checkpoint), [Crash recovery](#crash-recovery), [Data checksums](#data-checksums), [XLOG_PAGE_MAGIC](#xlog_page_magic), [Extension](#extension)
 
@@ -2085,6 +2089,14 @@ A hypothetical index exists only in the [planner](#planner)'s list of a table's 
 Planner code that would read the index file checks the flag first. The planning-time endpoint probe skips hypothetical indexes ([selfuncs.c#get_actual_variable_range-hypothetical](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L6207-L6212)). `gincostestimate()` uses zeroed metapage statistics instead of reading them, and `brincostestimate()` assumes the default pages per range ([selfuncs.c#gincostestimate-hypothetical](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L7697-L7711), [selfuncs.c#brincostestimate-hypothetical](../raw/postgres-17/src/backend/utils/adt/selfuncs.c#L8086-L8112)).
 
 Related: [IndexOptInfo](#indexoptinfo), [Hook](#hook), [Planner](#planner), [GIN](#gin), [BRIN](#brin)
+
+### Incremental backup
+
+**Aliases:** `pg_basebackup --incremental`, WAL summary, WAL summarizer, `summarize_wal`, `pg_wal/summaries`, `pg_combinebackup`. **Checked on:** PostgreSQL 17.
+
+In PostgreSQL 17, an incremental backup is a [base backup](#base-backup) that copies, for some relation files, only the blocks changed since an earlier backup, together with enough metadata to rebuild each file. `pg_basebackup --incremental` takes one and needs the earlier backup's manifest ([backup.sgml#backup-incremental-backup](../raw/postgres-17/doc/src/sgml/backup.sgml#L869-L877)). The server learns which blocks changed from WAL summaries in `pg_wal/summaries`, and the backup fails if the summaries do not cover the whole LSN range since the earlier backup ([backup.sgml#backup-incremental-backup](../raw/postgres-17/doc/src/sgml/backup.sgml#L880-L893)). The WAL summarizer process writes them, and it runs only when `summarize_wal` is on; that setting defaults to `off` and has `sighup` context, so changing it needs a reload ([walsummarizer.c:5-10](../raw/postgres-17/src/backend/postmaster/walsummarizer.c#L5-L10), [guc_tables.c#summarize_wal](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L1787-L1793)). The summarizer marks a block modified only when a WAL record carries a block reference to it, and it ignores the [free space map](#free-space-map) fork ([walsummarizer.c:1244-1265](../raw/postgres-17/src/backend/postmaster/walsummarizer.c#L1244-L1265)). So a change that a WAL record does not register is missing from the summary, and therefore from the next incremental backup. Restoring needs `pg_combinebackup` with the incremental backup and every earlier backup it depends on ([pg_combinebackup.sgml:33-36](../raw/postgres-17/doc/src/sgml/ref/pg_combinebackup.sgml#L33-L36), [backup.sgml#backup-incremental-backup](../raw/postgres-17/doc/src/sgml/backup.sgml#L896-L906)). `pg_combinebackup` does not recompute page checksums, so when an earlier backup in the chain was taken with [data checksums](#data-checksums) off and the final one with them on, the output can contain pages with invalid checksums ([pg_combinebackup.sgml#app-pgcombinebackup-limitations](../raw/postgres-17/doc/src/sgml/ref/pg_combinebackup.sgml#L277-L292)).
+
+Related: [Base backup](#base-backup), [WAL](#wal), [LSN](#lsn), [Data checksums](#data-checksums), [Visibility map](#visibility-map)
 
 ### Incremental sort
 
@@ -4806,11 +4818,14 @@ Related: [BLCKSZ](#blcksz), [Heap](#heap), [Tuple](#tuple), [varlena](#varlena)
 
 ### Torn page
 
-**Aliases:** torn write, torn read, partially written page. **Checked on:** PostgreSQL 12.
+**Aliases:** torn write, torn read, partially written page. **Checked on:** PostgreSQL 12, 17.
 
 In PostgreSQL 12, a torn page is a [page](#page) whose bytes mix two versions, because one write of the page did not land as a unit. The `full_page_writes` documentation describes the write side: a page write in progress during an operating-system crash can leave "an on-disk page that contains a mix of old and new data", which the row-level change data in [WAL](#wal) cannot repair. That is why the first change to each page after a [checkpoint](#checkpoint) is logged as a [full-page image](#full-page-image) ([config.sgml#guc-full-page-writes](../raw/postgres-12/doc/src/sgml/config.sgml#L2692-L2710)). A reader can see the same mix without any crash. A file copy that reads a page while the server writes it may get a "torn" (partially written) copy, which is why an online backup forces full-page writes ([xlog.c:10236-10248](../raw/postgres-12/src/backend/access/transam/xlog.c#L10236-L10248)). For the same reason, a base backup that verifies checksums re-reads a block once after a checksum failure, and reports the block only if the second read fails too ([basebackup.c#torn-block-retry](../raw/postgres-12/src/backend/replication/basebackup.c#L1470-L1493)). [Data checksums](#data-checksums) cover the whole page, so they can reveal a torn page ([checksum_impl.h#pg_checksum_page](../raw/postgres-12/src/include/storage/checksum_impl.h#L187-L208)).
 
-Related: [Data checksums](#data-checksums), [Full-page image](#full-page-image), [Checkpoint](#checkpoint), [Page](#page)
+**Version notes:**
+- PostgreSQL 17: Holds. The `full_page_writes` documentation gives the same crash reason for logging the first change after a checkpoint as a full-page image ([config.sgml#guc-full-page-writes](../raw/postgres-17/doc/src/sgml/config.sgml#L3302-L3312)). An online backup forces full-page writes for the same "torn" (partially written) copy ([xlog.c:8874-8883](../raw/postgres-17/src/backend/access/transam/xlog.c#L8874-L8883)). A base backup that verifies checksums re-reads a failing block once before reporting it ([basebackup.c#read_file_data_into_buffer](../raw/postgres-17/src/backend/backup/basebackup.c#L1875-L1909)). The checksum covers every byte of the page except `pd_checksum`, which is treated as zero during the calculation, plus the block number ([checksum_impl.h#pg_checksum_page](../raw/postgres-17/src/include/storage/checksum_impl.h#L196-L208)). During recovery, a hint-only change must not dirty a permanent page while checksums or `wal_log_hints` are on, because no WAL, and so no full-page image, can be written then; `MarkBufferDirtyHint()` returns early in that case ([bufmgr.c#MarkBufferDirtyHint](../raw/postgres-17/src/backend/storage/buffer/bufmgr.c#L5099-L5112)).
+
+Related: [Data checksums](#data-checksums), [Full-page image](#full-page-image), [Checkpoint](#checkpoint), [Page](#page), [Hint bits](#hint-bits)
 
 ### track_activity_query_size
 
@@ -6179,7 +6194,7 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-14/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-14/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 17** (535 files):
+**PostgreSQL 17** (538 files):
 
 - [configure.ac#blocksize](../raw/postgres-17/configure.ac#L258-L289)
 - [contrib/Makefile:32-38](../raw/postgres-17/contrib/Makefile#L32-L38)
@@ -6259,6 +6274,7 @@ One representative citation per cited source file, grouped by version:
 - [ref/explain.sgml:185-201](../raw/postgres-17/doc/src/sgml/ref/explain.sgml#L185-L201)
 - [grant.sgml:286-290](../raw/postgres-17/doc/src/sgml/ref/grant.sgml#L286-L290)
 - [pg_basebackup.sgml:55-61](../raw/postgres-17/doc/src/sgml/ref/pg_basebackup.sgml#L55-L61)
+- [pg_combinebackup.sgml:33-36](../raw/postgres-17/doc/src/sgml/ref/pg_combinebackup.sgml#L33-L36)
 - [pgupgrade.sgml:39-58](../raw/postgres-17/doc/src/sgml/ref/pgupgrade.sgml#L39-L58)
 - [prepare_transaction.sgml:41-46](../raw/postgres-17/doc/src/sgml/ref/prepare_transaction.sgml#L41-L46)
 - [ref/reindex.sgml:54-62](../raw/postgres-17/doc/src/sgml/ref/reindex.sgml#L54-L62)
@@ -6460,6 +6476,7 @@ One representative citation per cited source file, grouped by version:
 - [bgwriter.c:5-13](../raw/postgres-17/src/backend/postmaster/bgwriter.c#L5-L13)
 - [checkpointer.c:462-471](../raw/postgres-17/src/backend/postmaster/checkpointer.c#L462-L471)
 - [postmaster.c:3780-3793](../raw/postgres-17/src/backend/postmaster/postmaster.c#L3780-L3793)
+- [walsummarizer.c:5-10](../raw/postgres-17/src/backend/postmaster/walsummarizer.c#L5-L10)
 - [walwriter.c:5-15](../raw/postgres-17/src/backend/postmaster/walwriter.c#L5-L15)
 - [logical/Makefile#OBJS](../raw/postgres-17/src/backend/replication/logical/Makefile#L17-L31)
 - [applyparallelworker.c:438](../raw/postgres-17/src/backend/replication/logical/applyparallelworker.c#L438)
@@ -6665,6 +6682,7 @@ One representative citation per cited source file, grouped by version:
 - [bufmgr.h:156-163](../raw/postgres-17/src/include/storage/bufmgr.h#L156-L163)
 - [bufpage.h#Page](../raw/postgres-17/src/include/storage/bufpage.h#L22-L28)
 - [bulk_write.h:33-39](../raw/postgres-17/src/include/storage/bulk_write.h#L33-L39)
+- [checksum_impl.h#pg_checksum_page](../raw/postgres-17/src/include/storage/checksum_impl.h#L196-L208)
 - [itemid.h#ItemIdData](../raw/postgres-17/src/include/storage/itemid.h#L17-L30)
 - [itemptr.h#ItemPointerData](../raw/postgres-17/src/include/storage/itemptr.h#L20-L40)
 - [lock.h#LOCKTAG](../raw/postgres-17/src/include/storage/lock.h#L164-L172)
