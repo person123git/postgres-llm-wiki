@@ -149,6 +149,7 @@ verified_by_agent: not yet
   - [IndexOptInfo](#indexoptinfo)
   - [Inheritance](#inheritance)
   - [Injection point](#injection-point)
+  - [In-place update](#in-place-update)
   - [Invalid index](#invalid-index)
   - [Invalidation message](#invalidation-message)
   - [io_combine_limit](#io_combine_limit)
@@ -432,6 +433,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 - On 2026-11-05, the PostgreSQL 12 block zero scenarios question added [Empty page](#empty-page), [Orphaned relation file](#orphaned-relation-file), [pg_resetwal](#pg_resetwal), [Relation extension](#relation-extension) and [zero_damaged_pages](#zero_damaged_pages), checked on PostgreSQL 12 only. There are 377 terms.
 
 - On 2026-11-06, the review of the PostgreSQL 17 data checksum bug-fix list added [Incremental backup](#incremental-backup), checked on PostgreSQL 17 only. It also added PostgreSQL 17 notes to [Control file](#control-file), which is now checked on 12, 17 and 19, and to [Torn page](#torn-page), which is now checked on 12 and 17. There are 378 terms.
+
+- On 2026-11-06, the PostgreSQL 17 data corruption and data loss bug-fix list added [In-place update](#in-place-update), checked on PostgreSQL 17 only. There are 379 terms.
 
 ## Source Pins
 
@@ -2238,6 +2241,14 @@ An injection point is a named spot in server code where a test can attach a call
 - PostgreSQL 19: Differs as in 18: `INJECTION_POINT(name, arg)` takes a second argument, and `INJECTION_POINT_LOAD`, `INJECTION_POINT_CACHED` and `IS_INJECTION_POINT_ATTACHED` exist ([injection_point.h:27-40](../raw/postgres-19/src/include/utils/injection_point.h#L27-L40), [heapam.c:3372](../raw/postgres-19/src/backend/access/heap/heapam.c#L3372)). Injection points still run attached callbacks and compile to nothing without `--enable-injection-points`, and tests still use the `injection_points` module ([injection_point.c:3-7](../raw/postgres-19/src/backend/utils/misc/injection_point.c#L3-L7), [installation.sgml#configure-option-enable-injection-points](../raw/postgres-19/doc/src/sgml/installation.sgml#L1684-L1696), [injection_points.control:1-4](../raw/postgres-19/src/test/modules/injection_points/injection_points.control#L1-L4)).
 
 Related: [Isolation test](#isolation-test), [TAP test](#tap-test)
+
+### In-place update
+
+**Aliases:** inplace update, `systable_inplace_update_begin()`, `heap_inplace_lock()`, `heap_inplace_update_and_unlock()`. **Checked on:** PostgreSQL 17.
+
+In PostgreSQL 17, an in-place update overwrites a system [catalog](#catalog) row in its existing slot instead of writing a new row version, so the change is not MVCC-versioned and survives a rollback of the transaction that made it. `systable_inplace_update_begin()` documents this: overwriting violates both MVCC and transactional safety, so its uses are extremely limited ([genam.c:768-794](../raw/postgres-17/src/backend/access/index/genam.c#L768-L794)). `heap_inplace_lock()` takes the row's buffer lock and waits out conflicting updaters. Its comment names the fields that readers expect to be durable, such as `datfrozenxid`, and the `relhasindex` case that a rollback may lose ([heapam.c:6600-6640](../raw/postgres-17/src/backend/access/heap/heapam.c#L6600-L6640)). `heap_inplace_update_and_unlock()` requires the new tuple to have the same length as the old one, and raises `wrong tuple length` otherwise ([heapam.c:6771-6794](../raw/postgres-17/src/backend/access/heap/heapam.c#L6771-L6794)). It also sends the update's [invalidation messages](#invalidation-message) at once rather than at commit ([heapam.c#heap_inplace_update_and_unlock](../raw/postgres-17/src/backend/access/heap/heapam.c#L6888-L6892)).
+
+Related: [Catalog](#catalog), [Invalidation message](#invalidation-message), [Freezing](#freezing), [pg_class](#pg_class)
 
 ### Invalid index
 
@@ -6194,8 +6205,9 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-14/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-14/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 17** (538 files):
+**PostgreSQL 17** (539 files):
 
+- [genam.c:768-794](../raw/postgres-17/src/backend/access/index/genam.c#L768-L794)
 - [configure.ac#blocksize](../raw/postgres-17/configure.ac#L258-L289)
 - [contrib/Makefile:32-38](../raw/postgres-17/contrib/Makefile#L32-L38)
 - [README:1-9](../raw/postgres-17/contrib/README#L1-L9)
