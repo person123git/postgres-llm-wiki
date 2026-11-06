@@ -24,6 +24,7 @@ verified_by_agent: not yet
   - [Apply worker](#apply-worker)
   - [Arbiter index](#arbiter-index)
   - [Archive recovery](#archive-recovery)
+  - [Assertion-enabled build](#assertion-enabled-build)
   - [Asynchronous commit](#asynchronous-commit)
   - [Asynchronous I/O](#asynchronous-io)
   - [auto_explain](#auto_explain)
@@ -443,6 +444,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 
 - On 2026-11-06, the fourth review of the PostgreSQL 17 data corruption and data loss bug-fix list added [Archive recovery](#archive-recovery), checked on PostgreSQL 17 only. There are 382 terms.
 
+- On 2026-11-06, the second review of the PostgreSQL 17 data checksum bug-fix list added [Assertion-enabled build](#assertion-enabled-build), checked on PostgreSQL 17 only. There are 383 terms.
+
 ## Source Pins
 
 | Version | Checkout | Branch | Pinned commit |
@@ -615,6 +618,14 @@ Related: [Speculative insertion](#speculative-insertion), [ModifyTable](#modifyt
 In PostgreSQL 17, archive recovery is recovery that keeps replaying [WAL](#wal) from an archive or a primary, beyond what [crash recovery](#crash-recovery) finds in `pg_wal`. A signal file in the data directory requests it. `readRecoverySignalFile()` sets `StandbyModeRequested` and `ArchiveRecoveryRequested` for `standby.signal`, only `ArchiveRecoveryRequested` for `recovery.signal`, and returns with both false when neither file exists ([xlogrecovery.c:1066-1106](../raw/postgres-17/src/backend/access/transam/xlogrecovery.c#L1066-L1106), [xlog.h:302-303](../raw/postgres-17/src/include/access/xlog.h#L302-L303)). Without standby mode, `restore_command` is required; in standby mode, `primary_conninfo` can replace it ([xlogrecovery.c:1124-1142](../raw/postgres-17/src/backend/access/transam/xlogrecovery.c#L1124-L1142)). `restore_command` is empty by default and has context `sighup` ([guc_tables.c:3977-3984](../raw/postgres-17/src/backend/utils/misc/guc_tables.c#L3977-L3984)). Only archive recovery maintains the [minimum recovery point](#minimum-recovery-point) ([pg_control.h:143-149](../raw/postgres-17/src/include/catalog/pg_control.h#L143-L149)). It ends by choosing a new [timeline](#timeline) ([xlog.c:5903-5907](../raw/postgres-17/src/backend/access/transam/xlog.c#L5903-L5907)).
 
 Related: [Crash recovery](#crash-recovery), [Hot standby](#hot-standby), [Minimum recovery point](#minimum-recovery-point), [Promotion](#promotion), [Timeline](#timeline), [WAL archiving](#wal-archiving)
+
+### Assertion-enabled build
+
+**Aliases:** cassert build, `--enable-cassert`, meson `cassert`, `USE_ASSERT_CHECKING`, `Assert()`. **Checked on:** PostgreSQL 17.
+
+In PostgreSQL 17, an assertion-enabled build is a PostgreSQL binary compiled with its internal `Assert()` checks turned on. It is a debugging build, and it is off by default. `configure --enable-cassert` or meson's `cassert` option defines `USE_ASSERT_CHECKING`, and both options default to off ([configure.ac:795-797](../raw/postgres-17/configure.ac#L795-L797), [meson_options.txt:40-41](../raw/postgres-17/meson_options.txt#L40-L41)). Without that symbol, `Assert(condition)` expands to nothing, so the condition is never evaluated ([c.h:873-875](../raw/postgres-17/src/include/c.h#L873-L875)). With it, a false condition in server code calls `ExceptionalCondition()`, which prints a `TRAP` message and calls `abort()` ([c.h#Assert](../raw/postgres-17/src/include/c.h#L886-L894), [assert.c#ExceptionalCondition](../raw/postgres-17/src/backend/utils/error/assert.c#L30-L67)). So a bug that breaks only an assertion stops the process in an assertion-enabled build, while a default build carries on past it. When reading a fix whose commit reports an "assertion failure", check whether a default build had any other symptom.
+
+Related: [Back-patch](#back-patch)
 
 ### Asynchronous commit
 
@@ -6245,8 +6256,9 @@ One representative citation per cited source file, grouped by version:
 - [pg_regress.c:3](../raw/postgres-14/src/test/regress/pg_regress.c#L3)
 - [config_default.pl:19](../raw/postgres-14/src/tools/msvc/config_default.pl#L19)
 
-**PostgreSQL 17** (539 files):
+**PostgreSQL 17** (540 files):
 
+- [assert.c#ExceptionalCondition](../raw/postgres-17/src/backend/utils/error/assert.c#L30-L67)
 - [genam.c:768-794](../raw/postgres-17/src/backend/access/index/genam.c#L768-L794)
 - [configure.ac#blocksize](../raw/postgres-17/configure.ac#L258-L289)
 - [contrib/Makefile:32-38](../raw/postgres-17/contrib/Makefile#L32-L38)
