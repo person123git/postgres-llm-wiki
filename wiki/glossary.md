@@ -446,6 +446,8 @@ This is the one glossary for the whole wiki, shared by every PostgreSQL version.
 
 - On 2026-11-06, the second review of the PostgreSQL 17 data checksum bug-fix list added [Assertion-enabled build](#assertion-enabled-build), checked on PostgreSQL 17 only. There are 383 terms.
 
+- On 2026-11-10, the review of the PostgreSQL 12 partial-index pros and cons question added PostgreSQL 12 notes to [HOT-blocking column](#hot-blocking-column) and [EvalPlanQual](#evalplanqual), which are now checked on 12 and 17, and 12, 17 and 19, and a partial PostgreSQL 12 note to [Replica identity](#replica-identity). No term was added. There are 383 terms.
+
 ## Source Pins
 
 | Version | Checkout | Branch | Pinned commit |
@@ -1546,11 +1548,12 @@ Related: [Critical section](#critical-section), [Memory context](#memory-context
 
 ### EvalPlanQual
 
-**Aliases:** EPQ, EPQ recheck, `EvalPlanQual()`, `EPQState`, `fdw_recheck_quals`. **Checked on:** PostgreSQL 17, 19.
+**Aliases:** EPQ, EPQ recheck, `EvalPlanQual()`, `EPQState`, `fdw_recheck_quals`. **Checked on:** PostgreSQL 12, 17, 19.
 
 In PostgreSQL 19, EvalPlanQual (EPQ) is the executor's recheck of a row that a concurrent transaction has updated. Under READ COMMITTED, the executor takes the newest version of the row and re-evaluates the query's conditions on it to decide whether to process it ([execMain.c#EvalPlanQual](../raw/postgres-19/src/backend/executor/execMain.c#L2651-L2678)). The recheck can happen in an `UPDATE`, a `DELETE`, or a query with row marks such as `SELECT ... FOR UPDATE` ([postgres_fdw.c#epq-path](../raw/postgres-19/contrib/postgres_fdw/postgres_fdw.c#L7221-L7243)). Foreign scans must support it too. A `ForeignScan` keeps the conditions it checked remotely in `fdw_recheck_quals` for this purpose ([plannodes.h#ForeignScan-recheck](../raw/postgres-19/src/include/nodes/plannodes.h#L870-L873)). For a join pushed down to a remote server, `postgres_fdw` needs a local join path that can rebuild the joined row from the base relations, and gives up the push-down when none exists (same `postgres_fdw.c` lines). [pg_plan_advice](#pg_plan_advice)'s plan walker does not descend into that recheck subtree ([pgpa_walker.c#foreignscan-no-descend](../raw/postgres-19/contrib/pg_plan_advice/pgpa_walker.c#L397-L418)).
 
 **Version notes:**
+- PostgreSQL 12: Holds for the core recheck; 12 has no `pg_plan_advice` module. `EvalPlanQual()` tests whether the latest locked version of a row still matches the relevant quals ([execMain.c#EvalPlanQual](../raw/postgres-12/src/backend/executor/execMain.c#L2418-L2435)). Because of this recheck, the planner keeps quals implied by a partial-index predicate in the plan for `UPDATE`, `DELETE`, and `SELECT FOR UPDATE` targets instead of dropping them ([indxpath.c#check_index_predicates](../raw/postgres-12/src/backend/optimizer/path/indxpath.c#L3484-L3497)). This note did not re-check the 12 `postgres_fdw` details.
 - PostgreSQL 17: Holds, except that 17 has no `pg_plan_advice` module. `EvalPlanQual()` re-checks the newest version of an updated row against the query's conditions under READ COMMITTED ([execMain.c#EvalPlanQual](../raw/postgres-17/src/backend/executor/execMain.c#L2492-L2515)). `ExecUpdate()` calls it after locking the latest row version ([nodeModifyTable.c:2438-2444](../raw/postgres-17/src/backend/executor/nodeModifyTable.c#L2438-L2444)), and `LockRows` re-checks the rows of `SELECT ... FOR UPDATE` the same way ([nodeLockRows.c:254-275](../raw/postgres-17/src/backend/executor/nodeLockRows.c#L254-L275)). A `ForeignScan` keeps the remotely checked conditions in `fdw_recheck_quals` for the recheck ([plannodes.h:689-692](../raw/postgres-17/src/include/nodes/plannodes.h#L689-L692)), and `postgres_fdw` gives up a join push-down when no local join path suitable for the recheck exists ([postgres_fdw.c:6402-6407](../raw/postgres-17/contrib/postgres_fdw/postgres_fdw.c#L6402-L6407)).
 
 Related: [Row mark](#row-mark), [Foreign data wrapper](#foreign-data-wrapper), [Isolation level](#isolation-level), [Executor](#executor)
@@ -2087,11 +2090,14 @@ Related: [WAL](#wal), [Crash recovery](#crash-recovery), [Snapshot](#snapshot), 
 
 ### HOT-blocking column
 
-**Aliases:** HOT-blocking attribute, `INDEX_ATTR_BITMAP_HOT_BLOCKING`, `hot_attrs`, `hotblockingattrs`, summarized column (contrast), `INDEX_ATTR_BITMAP_SUMMARIZED`. **Checked on:** PostgreSQL 17.
+**Aliases:** HOT-blocking attribute, `INDEX_ATTR_BITMAP_HOT_BLOCKING`, `hot_attrs`, `hotblockingattrs`, summarized column (contrast), `INDEX_ATTR_BITMAP_SUMMARIZED`. **Checked on:** PostgreSQL 12, 17.
 
 A HOT-blocking column is a table column that a non-summarizing index uses anywhere: as a key or included column, inside an index expression, or in a partial-index predicate. An `UPDATE` that changes one cannot be a [HOT](#hot) update. `RelationGetIndexAttrBitmap()` builds the set from every index on the table ([relcache.c#RelationGetIndexAttrBitmap](../raw/postgres-17/src/backend/utils/cache/relcache.c#L5232-L5249), [relcache.c#RelationGetIndexAttrBitmap-attrs](../raw/postgres-17/src/backend/utils/cache/relcache.c#L5400-L5442)). The columns of an index whose access method sets `amsummarizing` go into a separate summarized set instead, because such an index does not block HOT ([relcache.c#RelationGetIndexAttrBitmap-summarizing](../raw/postgres-17/src/backend/utils/cache/relcache.c#L5390-L5398)); BRIN is the in-core [summarizing index](#summarizing-index) access method ([brin.c:269](../raw/postgres-17/src/backend/access/brin/brin.c#L269)).
 
 `heap_update()` fetches both sets ([heapam.c#heap_update-index-attrs](../raw/postgres-17/src/backend/access/heap/heapam.c#L3434-L3437)). When the new row version stays on the old page and no HOT-blocking column changed, the update is HOT, and only the summarizing indexes get new entries if a summarized column changed ([heapam.c#heap_update-hot-decision](../raw/postgres-17/src/backend/access/heap/heapam.c#L4140-L4166)). Otherwise every index that accepts the new row gets an entry, including indexes whose own columns did not change ([execIndexing.c#ExecInsertIndexTuples-loop](../raw/postgres-17/src/backend/executor/execIndexing.c#L343-L387)). That is why updating any HOT-blocking column adds version-churn entries to unrelated B-trees.
+
+**Version notes:**
+- PostgreSQL 12: Holds, with no summarizing exception: 12 has no `amsummarizing` flag and no `INDEX_ATTR_BITMAP_HOT_BLOCKING` set. `RelationGetIndexAttrBitmap()` collects every index's key and included columns, expression columns, and predicate columns into one set ([relcache.c#RelationGetIndexAttrBitmap-attrs](../raw/postgres-12/src/backend/utils/cache/relcache.c#L4925-L4960)). `heap_update()` uses that set as `hot_attrs` and does a HOT update only when none of those columns changed and the new row stays on the same page ([heapam.c:2963](../raw/postgres-12/src/backend/access/heap/heapam.c#L2963), [heapam.c#heap_update-hot-decision](../raw/postgres-12/src/backend/access/heap/heapam.c#L3591-L3601)). A non-HOT update then inserts into every index whose predicate the new row passes ([nodeModifyTable.c:1446](../raw/postgres-12/src/backend/executor/nodeModifyTable.c#L1446), [execIndexing.c#ExecInsertIndexTuples](../raw/postgres-12/src/backend/executor/execIndexing.c#L313-L357)).
 
 Related: [HOT](#hot), [Summarizing index](#summarizing-index), [Bottom-up index deletion](#bottom-up-index-deletion), [Bloat](#bloat), [Partial index](#partial-index)
 
@@ -4080,9 +4086,12 @@ Related: [CLUSTER](#cluster), [VACUUM FULL](#vacuum-full), [Table rewrite](#tabl
 
 ### Replica identity
 
-**Aliases:** `REPLICA IDENTITY`, `relreplident`, `REPLICA_IDENTITY_DEFAULT`, `REPLICA_IDENTITY_NOTHING`, `REPLICA_IDENTITY_FULL`, `REPLICA_IDENTITY_INDEX`, `ExtractReplicaIdentity()`. **Checked on:** PostgreSQL 17.
+**Aliases:** `REPLICA IDENTITY`, `relreplident`, `REPLICA_IDENTITY_DEFAULT`, `REPLICA_IDENTITY_NOTHING`, `REPLICA_IDENTITY_FULL`, `REPLICA_IDENTITY_INDEX`, `ExtractReplicaIdentity()`. **Checked on:** PostgreSQL 12 (partly), 17.
 
 In PostgreSQL 17, a table's replica identity chooses which old-row columns an `UPDATE` or `DELETE` writes to [WAL](#wal), so that [logical decoding](#logical-decoding) and a subscriber can find the row to change. `pg_class.relreplident` holds one of four settings: `d` (the default: the primary key, or nothing without one), `n` (nothing), `f` (all columns) or `i` (an explicitly chosen index) ([pg_class.h:179-190](../raw/postgres-17/src/include/catalog/pg_class.h#L179-L190)). New tables, materialized views and partitioned tables outside the system catalogs start with `d`; other relations get `n` ([relcache.c:3695-3702](../raw/postgres-17/src/backend/utils/cache/relcache.c#L3695-L3702)). `ALTER TABLE ... REPLICA IDENTITY` changes it ([gram.y:2917-2918](../raw/postgres-17/src/backend/parser/gram.y#L2917-L2918)). For a logically logged table, `ExtractReplicaIdentity()` builds the old-row tuple from the configured identity, and returns nothing for `n` ([heapam.c#ExtractReplicaIdentity](../raw/postgres-17/src/backend/access/heap/heapam.c#L9530-L9560)). `CheckCmdReplicaIdentity()` rejects an `UPDATE` or `DELETE` on a table whose [publication](#publication) publishes that action when the table has neither a replica identity index nor `FULL` identity ([execReplication.c#CheckCmdReplicaIdentity](../raw/postgres-17/src/backend/executor/execReplication.c#L656-L734)).
+
+**Version notes:**
+- PostgreSQL 12: Partly checked. `pg_class.relreplident` and the four `d`/`n`/`f`/`i` settings exist ([pg_class.h:113-114](../raw/postgres-12/src/include/catalog/pg_class.h#L113-L114), [pg_class.h:170-180](../raw/postgres-12/src/include/catalog/pg_class.h#L170-L180)). `ALTER TABLE ... REPLICA IDENTITY USING INDEX` rejects expression indexes and partial indexes ([tablecmds.c#ATExecReplicaIdentity](../raw/postgres-12/src/backend/commands/tablecmds.c#L13964-L13975)). The WAL-logging and publication-check details above were not re-checked on 12.
 
 Related: [Logical decoding](#logical-decoding), [Publication](#publication), [Apply worker](#apply-worker), [Catalog](#catalog)
 
@@ -5439,7 +5448,7 @@ Related: [Data checksums](#data-checksums), [All-zero page](#all-zero-page), [GU
 
 One representative citation per cited source file, grouped by version:
 
-**PostgreSQL 12** (447 files):
+**PostgreSQL 12** (449 files):
 
 - [auto_explain.c:95-105](../raw/postgres-12/contrib/auto_explain/auto_explain.c#L95-L105)
 - [pg_buffercache_pages.c:164-167](../raw/postgres-12/contrib/pg_buffercache/pg_buffercache_pages.c#L164-L167)
@@ -5897,6 +5906,8 @@ One representative citation per cited source file, grouped by version:
 - [bufmgr.h:264-275](../raw/postgres-12/src/include/storage/bufmgr.h#L264-L275)
 - [xlogutils.c:437-520](../raw/postgres-12/src/backend/access/transam/xlogutils.c#L437-L520)
 - [pg_resetwal.sgml:46-60](../raw/postgres-12/doc/src/sgml/ref/pg_resetwal.sgml#L46-L60)
+- [nodeModifyTable.c:1446](../raw/postgres-12/src/backend/executor/nodeModifyTable.c#L1446)
+- [execIndexing.c#ExecInsertIndexTuples](../raw/postgres-12/src/backend/executor/execIndexing.c#L313-L357)
 
 **PostgreSQL 14** (355 files):
 
